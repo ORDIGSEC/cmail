@@ -826,6 +826,13 @@ notify_new_message() {
     || notify-send "cmail" "New message from ${from:-unknown}" 2>/dev/null \
     || true
   echo "New message received: $(basename "$file")"
+
+  # Trigger cmail-agent if enabled
+  local agent_script
+  agent_script="$(cd "$(dirname "$0")" && pwd)/cmail-agent.sh"
+  if [[ -f "$COMMS_DIR/.agent-enabled" ]] && [[ -x "$agent_script" ]]; then
+    "$agent_script" >> "$COMMS_DIR/.agent/agent.log" 2>&1 &
+  fi
 }
 
 cmd_watch() {
@@ -887,6 +894,84 @@ cmd_watch() {
   fi
 }
 
+cmd_agent() {
+  local subcmd="${1:-status}"
+  local agent_marker="$COMMS_DIR/.agent-enabled"
+  local agent_log="$COMMS_DIR/.agent/agent.log"
+  local agent_lock="$COMMS_DIR/.agent/.lock"
+  local agent_session="$COMMS_DIR/.agent/session_id"
+
+  case "$subcmd" in
+    on|enable)
+      mkdir -p "$COMMS_DIR/.agent"
+      touch "$agent_marker"
+      echo "cmail-agent enabled. The watcher will auto-respond to incoming messages."
+      echo "  Model: ${CMAIL_AGENT_MODEL:-claude-sonnet-4-5-20250929}"
+      echo "  Timeout: ${CMAIL_AGENT_TIMEOUT:-120}s"
+      echo "  Log: $agent_log"
+      ;;
+    off|disable)
+      rm -f "$agent_marker"
+      echo "cmail-agent disabled."
+      ;;
+    status)
+      if [[ -f "$agent_marker" ]]; then
+        echo "cmail-agent: enabled"
+      else
+        echo "cmail-agent: disabled"
+      fi
+      if [[ -f "$agent_lock" ]] && kill -0 "$(cat "$agent_lock" 2>/dev/null)" 2>/dev/null; then
+        echo "  Status: running (PID: $(cat "$agent_lock"))"
+      else
+        echo "  Status: idle"
+      fi
+      if [[ -f "$agent_session" ]]; then
+        echo "  Session: $(cat "$agent_session")"
+      else
+        echo "  Session: none"
+      fi
+      echo "  Model: ${CMAIL_AGENT_MODEL:-claude-sonnet-4-5-20250929}"
+      echo "  Timeout: ${CMAIL_AGENT_TIMEOUT:-120}s"
+      if [[ -f "$agent_log" ]]; then
+        echo "  Log: $agent_log ($(wc -l < "$agent_log" | tr -d ' ') lines)"
+      fi
+      ;;
+    log|logs)
+      if [[ -f "$agent_log" ]]; then
+        tail -50 "$agent_log"
+      else
+        echo "No agent log yet."
+      fi
+      ;;
+    reset)
+      rm -f "$agent_session" "$agent_lock"
+      echo "Agent session and lock cleared."
+      ;;
+    run)
+      # Manually trigger the agent now
+      local agent_script
+      agent_script="$(cd "$(dirname "$0")" && pwd)/cmail-agent.sh"
+      if [[ -x "$agent_script" ]]; then
+        echo "Running cmail-agent..."
+        "$agent_script"
+      else
+        echo "Agent script not found: $agent_script" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "Usage: cmail agent [on|off|status|log|reset|run]" >&2
+      echo ""
+      echo "  on      Enable auto-respond (watcher triggers agent on new messages)"
+      echo "  off     Disable auto-respond"
+      echo "  status  Show agent status"
+      echo "  log     Show recent agent log"
+      echo "  reset   Clear session and lock"
+      echo "  run     Manually trigger agent now"
+      ;;
+  esac
+}
+
 # --- Main ---
 
 cmd="${1:-help}"
@@ -905,6 +990,7 @@ case "$cmd" in
   reply)   cmd_reply "$@" ;;
   hosts)   cmd_hosts "$@" ;;
   watch)   cmd_watch "$@" ;;
+  agent)   cmd_agent "$@" ;;
   deps)    cmd_deps "$@" ;;
   help|--help|-h)
     echo "cmail — File-based messaging over Tailscale SSH"
@@ -917,6 +1003,7 @@ case "$cmd" in
     echo "  reply <id> [--subject s] msg   Reply to a message"
     echo "  hosts                          List hosts + test connectivity"
     echo "  watch                          Watch for new messages"
+    echo "  agent [on|off|status|log|run]  Auto-respond agent"
     echo "  deps                           Check and install dependencies"
     echo "  help                           Show this help"
     ;;
