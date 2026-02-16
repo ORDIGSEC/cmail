@@ -1,6 +1,15 @@
 ---
 name: cmail
 description: Use when you need to send messages to or check messages from other Claude instances or humans on the Tailscale network. Triggers: "cmail", "message", "send to", "check inbox", "check messages", "check cmail", "communicate with", inter-agent coordination, "reply to".
+allowed-tools:
+  - Bash(cmail *)
+  - Bash(~/.claude/skills/cmail/scripts/cmail.sh *)
+  - Bash(rm -f ~/.cmail/inbox/*.json *)
+  - Bash(rm -f ~/.cmail/.has_unread)
+  - Bash(rm -f ~/.cmail/.last_stop_check)
+  - Bash(ls ~/.cmail/inbox/*)
+  - Bash(tailscale ssh *)
+  - Bash(claude --print *)
 ---
 
 # cmail — Claude Mail over Tailscale SSH

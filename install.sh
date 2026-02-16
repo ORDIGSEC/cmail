@@ -105,57 +105,88 @@ else
   echo "  $WATCH_LINE"
 fi
 
-# --- Step 5: Register Claude Code hooks ---
+# --- Step 5: Register Claude Code permissions and hooks ---
 
-install_hooks() {
+install_permissions_and_hooks() {
   if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
-    echo "No Claude Code settings found at $CLAUDE_SETTINGS — skipping hooks."
+    echo "No Claude Code settings found at $CLAUDE_SETTINGS — skipping."
     return 0
   fi
 
   if ! command -v jq &>/dev/null; then
-    echo "jq not found — skipping hooks registration. Install jq and re-run, or add hooks manually."
+    echo "jq not found — skipping settings registration. Install jq and re-run."
     return 0
   fi
 
+  local tmp="$CLAUDE_SETTINGS.tmp"
+  local changed=false
+
+  # --- Permissions ---
+  local cmail_perms=(
+    'Bash(cmail *)'
+    'Bash(~/.claude/skills/cmail/scripts/cmail.sh *)'
+    'Bash(rm -f ~/.cmail/inbox/*.json *)'
+    'Bash(rm -f ~/.cmail/.has_unread)'
+    'Bash(rm -f ~/.cmail/.last_stop_check)'
+    'Bash(ls ~/.cmail/inbox/*)'
+    'Bash(tailscale ssh *)'
+    'Bash(claude --print *)'
+  )
+
+  # Check which permissions are missing
+  local existing_perms
+  existing_perms="$(jq -r '.permissions.allow // [] | .[]' "$CLAUDE_SETTINGS" 2>/dev/null)" || true
+
+  local perms_to_add=()
+  for perm in "${cmail_perms[@]}"; do
+    if ! echo "$existing_perms" | grep -qF "$perm"; then
+      perms_to_add+=("$perm")
+    fi
+  done
+
+  if [[ ${#perms_to_add[@]} -gt 0 ]]; then
+    local perms_json
+    perms_json="$(printf '%s\n' "${perms_to_add[@]}" | jq -R . | jq -s .)"
+    jq --argjson new "$perms_json" '
+      .permissions //= {} |
+      .permissions.allow = ((.permissions.allow // []) + $new | unique)
+    ' "$CLAUDE_SETTINGS" > "$tmp" && mv "$tmp" "$CLAUDE_SETTINGS"
+    echo "Added ${#perms_to_add[@]} cmail permissions."
+    changed=true
+  else
+    echo "cmail permissions already registered."
+  fi
+
+  # --- Hooks ---
   local session_start="$HOOKS_SRC/session-start.sh"
   local user_prompt="$HOOKS_SRC/user-prompt-submit.sh"
   local stop_hook="$HOOKS_SRC/stop.sh"
 
-  # Check if cmail hooks are already registered
-  if jq -e '.hooks' "$CLAUDE_SETTINGS" &>/dev/null; then
-    if jq -r '.hooks | .. | .command? // empty' "$CLAUDE_SETTINGS" 2>/dev/null | grep -q "cmail"; then
-      echo "cmail hooks already registered, skipping."
-      return 0
-    fi
+  if jq -r '.hooks | .. | .command? // empty' "$CLAUDE_SETTINGS" 2>/dev/null | grep -q "cmail"; then
+    echo "cmail hooks already registered."
+  else
+    jq --arg ss "$session_start" --arg up "$user_prompt" --arg st "$stop_hook" '
+      .hooks //= {} |
+      .hooks.SessionStart = (.hooks.SessionStart // []) + [{
+        "hooks": [{"type": "command", "command": $ss, "timeout": 10}]
+      }] |
+      .hooks.UserPromptSubmit = (.hooks.UserPromptSubmit // []) + [{
+        "hooks": [{"type": "command", "command": $up, "timeout": 5}]
+      }] |
+      .hooks.Stop = (.hooks.Stop // []) + [{
+        "hooks": [{"type": "command", "command": $st, "timeout": 10}]
+      }]
+    ' "$CLAUDE_SETTINGS" > "$tmp" && mv "$tmp" "$CLAUDE_SETTINGS"
+    echo "Registered Claude Code hooks (SessionStart, UserPromptSubmit, Stop)."
+    changed=true
   fi
 
-  # Merge hooks into existing settings (preserving everything else)
-  local tmp="$CLAUDE_SETTINGS.tmp"
-  jq --arg ss "$session_start" --arg up "$user_prompt" --arg st "$stop_hook" '
-    # Ensure hooks object exists
-    .hooks //= {} |
-
-    # Add SessionStart hook
-    .hooks.SessionStart = (.hooks.SessionStart // []) + [{
-      "hooks": [{"type": "command", "command": $ss, "timeout": 10}]
-    }] |
-
-    # Add UserPromptSubmit hook
-    .hooks.UserPromptSubmit = (.hooks.UserPromptSubmit // []) + [{
-      "hooks": [{"type": "command", "command": $up, "timeout": 5}]
-    }] |
-
-    # Add Stop hook
-    .hooks.Stop = (.hooks.Stop // []) + [{
-      "hooks": [{"type": "command", "command": $st, "timeout": 10}]
-    }]
-  ' "$CLAUDE_SETTINGS" > "$tmp" && mv "$tmp" "$CLAUDE_SETTINGS"
-
-  echo "Registered Claude Code hooks (SessionStart, UserPromptSubmit, Stop)."
+  if [[ "$changed" == true ]]; then
+    echo "  Updated: $CLAUDE_SETTINGS"
+  fi
 }
 
-install_hooks
+install_permissions_and_hooks
 
 # --- Step 6: Status line integration ---
 
