@@ -46,7 +46,7 @@ for file in $(ls -1t "$INBOX_DIR"/*.json 2>/dev/null | head -3); do
   summary+="${entry}\n"
 done
 
-context="New cmail arrived while you were working! You have ${count} message(s). Check them with \`cmail inbox\` and read/reply as needed.\n\n${summary}"
+context="New cmail arrived while you were working! You have ${count} message(s). Check them with \`cmail inbox show\` and read/reply as needed.\n\n${summary}"
 
 if command -v jq &>/dev/null; then
   jq -n --arg ctx "$context" '{"additionalContext": $ctx}'

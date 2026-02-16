@@ -813,8 +813,27 @@ print(json.dumps(msg, indent=2))
 
 cmd_inbox() {
   ensure_config
+  local subcmd=""
   local if_new=false
 
+  # Parse subcommand and flags
+  case "${1:-}" in
+    show)    subcmd="show"; shift ;;
+    clear)   subcmd="clear"; shift ;;
+    --if-new) subcmd="show"; if_new=true; shift ;;
+    -h|--help|help) show_inbox_help; return 0 ;;
+    -*) ;; # unknown flags
+    "") ;;
+    *) subcmd="$1"; shift ;;
+  esac
+
+  # No subcommand = show help (Mullvad-style)
+  if [[ -z "$subcmd" ]]; then
+    show_inbox_help
+    return 0
+  fi
+
+  # Parse remaining flags
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --if-new) if_new=true; shift ;;
@@ -822,34 +841,64 @@ cmd_inbox() {
     esac
   done
 
-  if [[ "$if_new" == true ]]; then
-    if [[ ! -f "$UNREAD_MARKER" ]]; then
-      echo "No new messages."
-      return 0
-    fi
-  fi
+  case "$subcmd" in
+    show)
+      if [[ "$if_new" == true ]]; then
+        if [[ ! -f "$UNREAD_MARKER" ]]; then
+          echo "No new messages."
+          return 0
+        fi
+      fi
 
-  local files
-  files="$(ls -1 "$INBOX_DIR"/*.json 2>/dev/null | sort -r)" || true
+      local files
+      files="$(ls -1 "$INBOX_DIR"/*.json 2>/dev/null | sort -r)" || true
 
-  if [[ -z "$files" ]]; then
-    echo "Inbox is empty."
-    return 0
-  fi
+      if [[ -z "$files" ]]; then
+        echo "Inbox is empty."
+        return 0
+      fi
 
-  echo "=== Inbox ==="
-  echo ""
-  while IFS= read -r file; do
-    local id from subject timestamp
-    id="$(json_get "$file" '.id')"
-    from="$(json_get "$file" '.from')"
-    subject="$(json_get "$file" '.subject')"
-    timestamp="$(json_get "$file" '.timestamp')"
-    local short_id="${id:0:8}"
-    local display_subject=""
-    [[ -n "$subject" && "$subject" != "null" && "$subject" != "" ]] && display_subject=" — $subject"
-    echo "[$short_id] $timestamp  from: $from$display_subject"
-  done <<< "$files"
+      echo "=== Inbox ==="
+      echo ""
+      while IFS= read -r file; do
+        local id from subject timestamp
+        id="$(json_get "$file" '.id')"
+        from="$(json_get "$file" '.from')"
+        subject="$(json_get "$file" '.subject')"
+        timestamp="$(json_get "$file" '.timestamp')"
+        local short_id="${id:0:8}"
+        local display_subject=""
+        [[ -n "$subject" && "$subject" != "null" && "$subject" != "" ]] && display_subject=" — $subject"
+        echo "[$short_id] $timestamp  from: $from$display_subject"
+      done <<< "$files"
+      ;;
+
+    clear)
+      local count
+      count="$(ls -1 "$INBOX_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ')" || count=0
+      if (( count == 0 )); then
+        echo "Inbox is already empty."
+        return 0
+      fi
+
+      echo "WARNING: This will permanently delete $count message(s) from your inbox."
+      read -r -p "Are you sure? [y/N] " confirm </dev/tty 2>/dev/null || confirm=""
+      if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        rm -f "$INBOX_DIR"/*.json
+        rm -f "$UNREAD_MARKER"
+        echo "Inbox cleared ($count messages removed)."
+      else
+        echo "Aborted."
+      fi
+      ;;
+
+    *)
+      echo "Unknown inbox subcommand: $subcmd"
+      echo ""
+      show_inbox_help
+      return 1
+      ;;
+  esac
 }
 
 cmd_read() {
@@ -1272,9 +1321,13 @@ show_send_help() {
 }
 
 show_inbox_help() {
-  echo "List messages in your inbox"
+  echo "List or manage messages in your inbox"
   echo ""
-  echo "USAGE: cmail inbox [options]"
+  echo "USAGE: cmail inbox [subcommand] [options]"
+  echo ""
+  echo "SUBCOMMANDS:"
+  echo "  show     List all messages (default)"
+  echo "  clear    Delete all messages (requires confirmation)"
   echo ""
   echo "OPTIONS:"
   echo "  --if-new     Only show messages if there are unread ones"
@@ -1282,7 +1335,9 @@ show_inbox_help() {
   echo ""
   echo "EXAMPLES:"
   echo "  cmail inbox"
+  echo "  cmail inbox show"
   echo "  cmail inbox --if-new"
+  echo "  cmail inbox clear"
 }
 
 show_read_help() {
@@ -1419,7 +1474,6 @@ case "$cmd" in
     if is_help_flag "${1:-}" || [[ $# -eq 0 ]]; then show_send_help; exit 0; fi
     cmd_send "$@" ;;
   inbox)
-    if is_help_flag "${1:-}"; then show_inbox_help; exit 0; fi
     cmd_inbox "$@" ;;
   read)
     if is_help_flag "${1:-}" || [[ $# -eq 0 ]]; then show_read_help; exit 0; fi

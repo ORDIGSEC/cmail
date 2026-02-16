@@ -15,7 +15,7 @@ if (( count == 0 )); then
   exit 0
 fi
 
-context="FYI: You have ${count} unread cmail message(s). Run \`cmail inbox --if-new\` to check them."
+context="FYI: You have ${count} unread cmail message(s). Run \`cmail inbox show --if-new\` to check them."
 
 if command -v jq &>/dev/null; then
   jq -n --arg ctx "$context" '{"additionalContext": $ctx}'

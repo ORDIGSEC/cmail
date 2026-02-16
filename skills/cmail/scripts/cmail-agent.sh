@@ -133,7 +133,7 @@ You have access to the full system via Bash. You can run commands, check status,
 Available cmail commands:
 - cmail reply <id> "message" — reply to a message (preserves threading)
 - cmail send <host> "message" — send a new message
-- cmail inbox — list all inbox messages
+- cmail inbox show — list all inbox messages
 - rm ~/.cmail/inbox/<filename>.json — remove a handled message
 
 Keep replies concise. You are responding via cmail, not a terminal — short, actionable messages work best.'

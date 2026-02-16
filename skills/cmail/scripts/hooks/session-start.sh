@@ -33,7 +33,7 @@ for file in $(ls -1t "$INBOX_DIR"/*.json 2>/dev/null | head -5); do
   summary+="${entry}\n"
 done
 
-context="You have ${count} cmail message(s) in your inbox. Run \`cmail inbox\` to see them or \`cmail read <id>\` to read one.\n\nNewest messages:\n${summary}"
+context="You have ${count} cmail message(s) in your inbox. Run \`cmail inbox show\` to see them or \`cmail read <id>\` to read one.\n\nNewest messages:\n${summary}"
 
 # Output JSON with additionalContext for Claude
 if command -v jq &>/dev/null; then

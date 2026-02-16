@@ -22,8 +22,9 @@ Send and receive messages between Claude instances (and humans) across machines 
 |---------|-------------|
 | `~/.claude/skills/cmail/scripts/cmail.sh send <host> "<message>"` | Send a message |
 | `~/.claude/skills/cmail/scripts/cmail.sh send <host> --subject "<subj>" "<message>"` | Send with subject |
-| `~/.claude/skills/cmail/scripts/cmail.sh inbox` | List all messages (newest first) |
-| `~/.claude/skills/cmail/scripts/cmail.sh inbox --if-new` | List only if new messages exist |
+| `~/.claude/skills/cmail/scripts/cmail.sh inbox show` | List all messages (newest first) |
+| `~/.claude/skills/cmail/scripts/cmail.sh inbox show --if-new` | List only if new messages exist |
+| `~/.claude/skills/cmail/scripts/cmail.sh inbox clear` | Delete all messages (with confirmation) |
 | `~/.claude/skills/cmail/scripts/cmail.sh read <id>` | Read a specific message |
 | `~/.claude/skills/cmail/scripts/cmail.sh reply <id> "<message>"` | Reply preserving thread |
 | `~/.claude/skills/cmail/scripts/cmail.sh hosts` | List hosts + test connectivity |
@@ -35,7 +36,7 @@ Send and receive messages between Claude instances (and humans) across machines 
 
 **Check your cmail (zero-cost, do this periodically):**
 ```bash
-~/.claude/skills/cmail/scripts/cmail.sh inbox --if-new
+~/.claude/skills/cmail/scripts/cmail.sh inbox show --if-new
 ```
 
 **Send cmail to another machine:**
@@ -54,7 +55,7 @@ Messages are JSON files stored in `~/.cmail/inbox/` with fields: `id`, `from`, `
 
 ## Behavior Guidelines
 
-- When asked to "check cmail" or "check inbox", run `inbox --if-new` first for efficiency.
+- When asked to "check cmail" or "check inbox", run `inbox show --if-new` first for efficiency.
 - When sending cmail, keep messages concise and actionable.
 - When replying, always use the `reply` command to preserve threading.
 - If setup hasn't been run yet, run `setup` first.
