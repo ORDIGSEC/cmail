@@ -1373,15 +1373,38 @@ cmd_agent() {
 }
 
 cmd_update() {
-  # Find the repo directory (SCRIPT_DIR is inside skills/cmail/scripts/)
-  local repo_dir="$SCRIPT_DIR/../../.."
-  if [[ ! -d "$repo_dir/.git" ]]; then
-    # Try following the skill symlink
-    repo_dir="$(readlink -f "$SCRIPT_DIR/../../.." 2>/dev/null || echo "")"
-    if [[ -z "$repo_dir" || ! -d "$repo_dir/.git" ]]; then
-      echo "Could not find cmail git repo. Update manually." >&2
-      return 1
+  # Walk up from SCRIPT_DIR looking for a .git directory
+  find_git_root() {
+    local dir="$1"
+    while [[ "$dir" != "/" ]]; do
+      if [[ -d "$dir/.git" ]]; then
+        echo "$dir"
+        return 0
+      fi
+      dir="$(dirname "$dir")"
+    done
+    return 1
+  }
+
+  local repo_dir=""
+  # First try from SCRIPT_DIR directly
+  repo_dir="$(find_git_root "$SCRIPT_DIR")" || true
+  # If not found, try after resolving symlinks
+  if [[ -z "$repo_dir" ]]; then
+    local resolved
+    resolved="$(readlink -f "$SCRIPT_DIR" 2>/dev/null || echo "")"
+    if [[ -n "$resolved" ]]; then
+      repo_dir="$(find_git_root "$resolved")" || true
     fi
+  fi
+
+  if [[ -z "$repo_dir" ]]; then
+    echo "Could not find cmail git repo." >&2
+    echo "" >&2
+    echo "If you installed cmail from a standalone copy, update manually:" >&2
+    echo "  git clone https://github.com/ORDIGSEC/cmail.git" >&2
+    echo "  cd cmail && ./install.sh" >&2
+    return 1
   fi
 
   echo "Pulling latest code..."
