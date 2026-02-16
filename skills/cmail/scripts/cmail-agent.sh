@@ -128,13 +128,13 @@ Your job:
 3. Clean up handled messages by removing them from ~/.cmail/inbox/
 4. Be helpful, concise, and actionable in your replies
 
-You have access to the full system via Bash. You can run commands, check status, read files, etc. to answer questions asked in messages.
+You can read files and search the codebase to answer questions. You can only run cmail commands and manage inbox files.
 
-Available cmail commands:
+Available commands:
 - cmail reply <id> "message" — reply to a message (preserves threading)
 - cmail send <host> "message" — send a new message
 - cmail inbox show — list all inbox messages
-- rm ~/.cmail/inbox/<filename>.json — remove a handled message
+- rm -f ~/.cmail/inbox/<filename>.json — remove a handled message
 
 Keep replies concise. You are responding via cmail, not a terminal — short, actionable messages work best.'
 
@@ -166,7 +166,7 @@ main() {
     "--model" "${CMAIL_AGENT_MODEL:-claude-sonnet-4-5-20250929}"
     "--output-format" "json"
     "--system-prompt" "$SYSTEM_PROMPT"
-    "--allowedTools" "Bash" "Edit" "Write" "Read" "Grep" "Glob"
+    "--allowedTools" "Bash(cmail *)" "Bash(rm -f ~/.cmail/inbox/*.json)" "Bash(ls ~/.cmail/inbox/*)" "Read" "Grep" "Glob"
     "-p" "$inbox_prompt"
   )
 
