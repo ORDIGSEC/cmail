@@ -609,9 +609,29 @@ notify_new_message() {
 }
 
 cmd_watch() {
+  local daemon=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --daemon) daemon=true; shift ;;
+      *) shift ;;
+    esac
+  done
+
   ensure_dirs
-  echo "Watching for new messages in $INBOX_DIR ..."
-  echo "Press Ctrl+C to stop."
+
+  # In daemon mode, silently exit if already running
+  local pidfile="$COMMS_DIR/.watch.pid"
+  if [[ "$daemon" == true ]]; then
+    if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+      return 0
+    fi
+    echo $$ > "$pidfile"
+  fi
+
+  if [[ "$daemon" != true ]]; then
+    echo "Watching for new messages in $INBOX_DIR ..."
+    echo "Press Ctrl+C to stop."
+  fi
 
   if command -v fswatch &>/dev/null; then
     echo "(using fswatch)"

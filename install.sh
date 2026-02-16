@@ -74,6 +74,35 @@ else
   echo "Config already exists, skipping."
 fi
 
+# Auto-start watcher in shell profile
+WATCH_LINE='command -v cmail &>/dev/null && cmail watch --daemon &>/dev/null &'
+SHELL_RC=""
+if [[ -f "$HOME/.zshrc" ]]; then
+  SHELL_RC="$HOME/.zshrc"
+elif [[ -f "$HOME/.bashrc" ]]; then
+  SHELL_RC="$HOME/.bashrc"
+elif [[ -f "$HOME/.bash_profile" ]]; then
+  SHELL_RC="$HOME/.bash_profile"
+fi
+
+if [[ -n "$SHELL_RC" ]]; then
+  if ! grep -qF "cmail watch --daemon" "$SHELL_RC" 2>/dev/null; then
+    echo "" >> "$SHELL_RC"
+    echo "# cmail: auto-start inbox watcher" >> "$SHELL_RC"
+    echo "$WATCH_LINE" >> "$SHELL_RC"
+    echo "Added cmail watcher to $SHELL_RC"
+  else
+    echo "Watcher already in $SHELL_RC, skipping."
+  fi
+else
+  echo "Note: Could not find shell rc file. Add this to your shell profile manually:"
+  echo "  $WATCH_LINE"
+fi
+
+# Start the watcher now
+"$SKILL_SRC/scripts/cmail.sh" watch --daemon &>/dev/null &
+echo "Started cmail watcher (PID: $!)."
+
 echo ""
 echo "Installation complete!"
 echo ""
