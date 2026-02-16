@@ -343,7 +343,16 @@ else
   echo "  To add manually, see: cmail setup"
 fi
 
-# --- Step 7: Start watcher ---
+# --- Step 7: Enable agent ---
+
+if [[ ! -f "$HOME/.cmail/.agent-enabled" ]]; then
+  touch "$HOME/.cmail/.agent-enabled"
+  echo "Enabled auto-respond agent."
+else
+  echo "Agent already enabled."
+fi
+
+# --- Step 8: Start watcher ---
 
 "$SKILL_SRC/scripts/cmail.sh" watch --daemon &>/dev/null &
 echo "Started cmail watcher (PID: $!)."

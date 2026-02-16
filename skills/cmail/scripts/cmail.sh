@@ -238,6 +238,49 @@ print(method)
   fi
 }
 
+# Resolve a sender identity (from message's "from" field) to a configured host name.
+# The sender's identity may differ from the config key (e.g. "biggirldl380" vs "biggirl").
+# Tries: exact match, case-insensitive match, then substring match.
+resolve_sender_to_host() {
+  local sender="$1"
+  local sender_lower
+  sender_lower="$(echo "$sender" | tr '[:upper:]' '[:lower:]')"
+
+  # Check if sender matches a configured host name directly
+  local address
+  address="$(get_host_address "$sender")"
+  if [[ -n "$address" ]]; then
+    echo "$sender"
+    return
+  fi
+
+  # Search configured hosts for a name that's a substring of the sender or vice versa
+  local hosts=""
+  if command -v jq &>/dev/null; then
+    hosts="$(jq -r '.hosts | keys[]' "$CONFIG_FILE" 2>/dev/null)" || true
+  else
+    hosts="$(python3 -c "
+import json
+with open('$CONFIG_FILE') as f: data = json.load(f)
+for k in data.get('hosts', {}): print(k)
+" 2>/dev/null)" || true
+  fi
+
+  while IFS= read -r h; do
+    [[ -z "$h" ]] && continue
+    local h_lower
+    h_lower="$(echo "$h" | tr '[:upper:]' '[:lower:]')"
+    # biggirl matches biggirldl380, or biggirldl380 matches biggirl
+    if [[ "$sender_lower" == *"$h_lower"* || "$h_lower" == *"$sender_lower"* ]]; then
+      echo "$h"
+      return
+    fi
+  done <<< "$hosts"
+
+  # No match found — return sender as-is
+  echo "$sender"
+}
+
 auto_update_ssh_method() {
   local addr="$1"
   # Update config so future calls skip the failed tailscale attempt
@@ -299,7 +342,7 @@ cmd_setup() {
   echo ""
 
   # --- 1. Identity ---
-  echo "── Step 1/5: Identity ──"
+  echo "── Step 1/6: Identity ──"
   echo ""
   local identity
   identity="$(json_get "$CONFIG_FILE" '.identity')"
@@ -325,7 +368,7 @@ with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
   echo ""
 
   # --- 2. Hosts ---
-  echo "── Step 2/5: Remote Hosts ──"
+  echo "── Step 2/6: Remote Hosts ──"
   echo ""
 
   # Show existing hosts
@@ -476,7 +519,7 @@ with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
   done
 
   # --- 3. Hooks ---
-  echo "── Step 3/5: Claude Code Hooks ──"
+  echo "── Step 3/6: Claude Code Hooks ──"
   echo ""
   echo "  Hooks let Claude auto-detect new messages."
   echo "    - SessionStart:     check inbox when a session opens"
@@ -528,7 +571,7 @@ with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
   echo ""
 
   # --- 4. Status line ---
-  echo "── Step 4/5: Status Line ──"
+  echo "── Step 4/6: Status Line ──"
   echo ""
   echo "  Show inbox count in Claude Code's status line: (3) cmail"
   echo ""
@@ -568,7 +611,7 @@ CMAIL_EOF
   echo ""
 
   # --- 5. Watcher ---
-  echo "── Step 5/5: Inbox Watcher ──"
+  echo "── Step 5/6: Inbox Watcher ──"
   echo ""
 
   local watcher_running=false
@@ -610,6 +653,36 @@ CMAIL_EOF
   fi
   echo ""
 
+  # --- 6. Agent ---
+  echo "── Step 6/6: Auto-Respond Agent ──"
+  echo ""
+  echo "  When enabled, the agent uses 'claude --print' to automatically"
+  echo "  read and reply to incoming messages — even when no user is active."
+  echo ""
+
+  local agent_enabled=false
+  if [[ -f "$COMMS_DIR/.agent-enabled" ]]; then
+    echo "  Agent is currently: ENABLED"
+    agent_enabled=true
+    read -r -p "  Keep it enabled? [Y/n] " agent_confirm </dev/tty 2>/dev/null || agent_confirm="y"
+    if [[ "$agent_confirm" =~ ^[Nn] ]]; then
+      rm -f "$COMMS_DIR/.agent-enabled"
+      agent_enabled=false
+      echo "  Agent disabled."
+    fi
+  else
+    echo "  Agent is currently: DISABLED"
+    read -r -p "  Enable auto-respond agent? [Y/n] " agent_confirm </dev/tty 2>/dev/null || agent_confirm="y"
+    if [[ ! "$agent_confirm" =~ ^[Nn] ]]; then
+      touch "$COMMS_DIR/.agent-enabled"
+      agent_enabled=true
+      echo "  Agent enabled!"
+    else
+      echo "  Skipped. Run 'cmail agent on' to enable later."
+    fi
+  fi
+  echo ""
+
   # --- Summary ---
   echo "╔══════════════════════════════════════╗"
   echo "║          Setup complete!             ║"
@@ -640,6 +713,12 @@ CMAIL_EOF
     echo "  Watcher:     running"
   else
     echo "  Watcher:     not running"
+  fi
+
+  if [[ "$agent_enabled" == true ]]; then
+    echo "  Agent:       enabled"
+  else
+    echo "  Agent:       disabled"
   fi
 
   echo ""
@@ -867,9 +946,13 @@ cmd_reply() {
   orig_thread_id="$(json_get "$found" '.thread_id')"
   orig_subject="$(json_get "$found" '.subject')"
 
+  # Resolve sender identity to a configured host name
+  local reply_host
+  reply_host="$(resolve_sender_to_host "$orig_from")"
+
   [[ -z "$subject" && -n "$orig_subject" && "$orig_subject" != "null" ]] && subject="Re: $orig_subject"
 
-  cmd_send "$orig_from" --subject "$subject" --in-reply-to "$target_id" --thread-id "$orig_thread_id" "$message"
+  cmd_send "$reply_host" --subject "$subject" --in-reply-to "$target_id" --thread-id "$orig_thread_id" "$message"
 }
 
 cmd_hosts() {
@@ -1295,12 +1378,13 @@ show_setup_help() {
   echo ""
   echo "USAGE: cmail setup"
   echo ""
-  echo "Walks through 5 steps:"
+  echo "Walks through 6 steps:"
   echo "  1. Identity     — set your hostname for messaging"
   echo "  2. Remote Hosts — auto-discover Tailscale peers or add manually"
   echo "  3. Hooks        — install Claude Code hooks for message awareness"
   echo "  4. Status Line  — add inbox count to Claude Code status line"
   echo "  5. Watcher      — start the background inbox watcher"
+  echo "  6. Agent        — enable auto-respond via claude --print"
   echo ""
   echo "OPTIONS:"
   echo "  -h, --help   Show this help"
