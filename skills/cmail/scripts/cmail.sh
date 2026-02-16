@@ -596,41 +596,53 @@ for name, info in data.get('hosts', {}).items():
   done <<< "$hosts_json"
 }
 
+notify_new_message() {
+  local file="$1"
+  local from=""
+  [[ -f "$file" ]] && from="$(json_get "$file" '.from' 2>/dev/null)" || true
+  touch "$UNREAD_MARKER"
+  # Desktop notification (platform-dependent, silently skipped if unavailable)
+  osascript -e "display notification \"New message from ${from:-unknown}\" with title \"cmail\"" 2>/dev/null \
+    || notify-send "cmail" "New message from ${from:-unknown}" 2>/dev/null \
+    || true
+  echo "New message received: $(basename "$file")"
+}
+
 cmd_watch() {
   ensure_dirs
   echo "Watching for new messages in $INBOX_DIR ..."
   echo "Press Ctrl+C to stop."
 
-  local watch_cmd=""
   if command -v fswatch &>/dev/null; then
-    watch_cmd="fswatch"
-  elif command -v inotifywait &>/dev/null; then
-    watch_cmd="inotifywait"
-  else
-    echo "Error: Neither fswatch (macOS) nor inotifywait (Linux) found." >&2
-    echo "Install with: brew install fswatch (macOS) or apt install inotify-tools (Linux)" >&2
-    exit 1
-  fi
-
-  if [[ "$watch_cmd" == "fswatch" ]]; then
+    echo "(using fswatch)"
     fswatch -0 "$INBOX_DIR" | while IFS= read -r -d '' event; do
       [[ "$event" == *.json ]] || continue
-      touch "$UNREAD_MARKER"
-      # Desktop notification (macOS)
-      local from=""
-      [[ -f "$event" ]] && from="$(json_get "$event" '.from' 2>/dev/null)" || true
-      osascript -e "display notification \"New message from ${from:-unknown}\" with title \"cmail\"" 2>/dev/null || true
-      echo "New message received: $(basename "$event")"
+      notify_new_message "$event"
     done
-  else
+  elif command -v inotifywait &>/dev/null; then
+    echo "(using inotifywait)"
     inotifywait -m -e create --format '%w%f' "$INBOX_DIR" | while IFS= read -r event; do
       [[ "$event" == *.json ]] || continue
-      touch "$UNREAD_MARKER"
-      # Desktop notification (Linux)
-      local from=""
-      [[ -f "$event" ]] && from="$(json_get "$event" '.from' 2>/dev/null)" || true
-      notify-send "cmail" "New message from ${from:-unknown}" 2>/dev/null || true
-      echo "New message received: $(basename "$event")"
+      notify_new_message "$event"
+    done
+  else
+    echo "(using polling — install fswatch or inotify-tools for instant detection)"
+    local poll_interval="${CMAIL_POLL_INTERVAL:-5}"
+    local known_files
+    known_files="$(ls -1 "$INBOX_DIR"/*.json 2>/dev/null | sort)" || true
+    while true; do
+      sleep "$poll_interval"
+      local current_files
+      current_files="$(ls -1 "$INBOX_DIR"/*.json 2>/dev/null | sort)" || true
+      if [[ "$current_files" != "$known_files" ]]; then
+        # Find new files
+        local new_files
+        new_files="$(comm -13 <(echo "$known_files") <(echo "$current_files"))" || true
+        while IFS= read -r file; do
+          [[ -n "$file" ]] && notify_new_message "$file"
+        done <<< "$new_files"
+        known_files="$current_files"
+      fi
     done
   fi
 }
