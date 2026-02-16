@@ -65,6 +65,8 @@ This will:
 - Create `~/.cmail/inbox/` and `~/.cmail/outbox/`
 - Generate a default `~/.cmail/config.json` with your hostname as identity
 - Make the main script executable
+- Add `cmail watch --daemon` to your shell profile (`.zshrc`, `.bashrc`, or `.bash_profile`) so the inbox watcher starts automatically on every new shell session
+- Start the watcher immediately
 
 ### 3. Repeat on every machine
 Run the installer on each machine where you want cmail available (both sending and receiving).
@@ -176,20 +178,14 @@ Starts a background watcher that:
 - Creates a `.has_unread` marker when messages arrive
 - Sends a desktop notification (platform-dependent)
 
+**Note:** The installer automatically adds `cmail watch --daemon` to your shell profile, so the watcher starts on every new shell session. You only need to run `cmail watch` manually if you want to see output in the foreground.
+
+The `--daemon` flag writes a PID file and silently exits if a watcher is already running, so multiple shell sessions won't spawn duplicate watchers.
+
 **Platform differences:**
 - **macOS:** Uses `fswatch` + `osascript` for notifications
 - **Linux desktop:** Uses `inotifywait` + `notify-send`
 - **Linux server:** Uses `inotifywait` but skips notifications
-
-Run in the background:
-```bash
-cmail watch &
-```
-
-Or add to your shell startup (`~/.bashrc`, `~/.zshrc`):
-```bash
-~/.claude/skills/cmail/scripts/cmail.sh watch &>/dev/null &
-```
 
 ---
 
