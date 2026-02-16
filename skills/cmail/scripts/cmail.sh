@@ -823,7 +823,15 @@ for name, info in data.get('hosts', {}).items():
 notify_new_message() {
   local file="$1"
   local from=""
-  [[ -f "$file" ]] && from="$(json_get "$file" '.from' 2>/dev/null)" || true
+  # Small delay + retry — fswatch fires before the file is fully written
+  local attempt
+  for attempt in 1 2 3; do
+    if [[ -f "$file" ]]; then
+      from="$(json_get "$file" '.from' 2>/dev/null)" || true
+      [[ -n "$from" && "$from" != "null" ]] && break
+    fi
+    sleep 0.2
+  done
   touch "$UNREAD_MARKER"
   # Desktop notification (platform-dependent, silently skipped if unavailable)
   osascript -e "display notification \"New message from ${from:-unknown}\" with title \"cmail\"" 2>/dev/null \
