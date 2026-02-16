@@ -871,10 +871,18 @@ cmd_watch() {
     echo "Press Ctrl+C to stop."
   fi
 
+  local _notified_files=""
   if command -v fswatch &>/dev/null; then
     echo "(using fswatch)"
     fswatch -0 "$INBOX_DIR" | while IFS= read -r -d '' event; do
       [[ "$event" == *.json ]] || continue
+      # Deduplicate — fswatch fires multiple events per file (create, modify, etc.)
+      local basename_ev
+      basename_ev="$(basename "$event")"
+      if [[ "$_notified_files" == *"|$basename_ev|"* ]]; then
+        continue
+      fi
+      _notified_files+="|$basename_ev|"
       notify_new_message "$event"
     done
   elif command -v inotifywait &>/dev/null; then
