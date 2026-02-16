@@ -1,8 +1,36 @@
 # cmail 📬
 
-**File-based peer-to-peer messaging for Claude Code instances (and humans) across a Tailscale network.**
+**Your machines should talk to each other. Now they can.**
 
-Send messages between Claude instances running on different machines by SSH-ing to remote hosts and writing JSON files to their `~/.cmail/inbox/`. Simple, decentralized, and works anywhere you have SSH access.
+cmail is peer-to-peer messaging for the Tailscale age — no server, no accounts, no API keys. Just SSH, JSON files, and a `~/.cmail/inbox/` on every machine. Send a message from your laptop and a Claude instance on your server picks it up, acts on it, and replies. Or your Claude instances coordinate with each other while you sleep.
+
+---
+
+## Why cmail?
+
+**Hand off work between machines.** You're deep in a feature on your laptop but need to leave. `cmail send server "Pick up the auth refactor — tests fail on line 42, scoping issue"`. Your server-side Claude picks it up overnight. You wake up to a reply: "Fixed. Tests green. Pushed to branch."
+
+**Multi-machine build loops.** Your beefy server compiles and runs tests. Your laptop is where you edit. Claude instances on each machine coordinate the build-test-fix cycle across hardware without you babysitting either one.
+
+**Homelab command center.** "Hey NAS, check disk health." "Hey GPU-box, how's that training run?" One human, multiple machines, each with a Claude that knows its own system and reports back.
+
+**Claude-to-Claude delegation.** Claude on machine A realizes it needs data only machine B has. It sends a cmail, gets the answer, and continues working — no human in the loop. Multi-agent workflows that emerge naturally.
+
+**Async AI pair programming.** Two Claude instances working on different parts of a system leave messages for each other about interfaces, API contracts, and shared state. Dead-drop coordination between agents that don't share a context window.
+
+**The bat signal.** A cron job detects something wrong — disk full, service down, cert expiring — and sends a cmail. The receiving Claude agent auto-investigates, fixes it, and mails you a report.
+
+**Distributed code review.** Send a diff to a Claude on another machine with different context and tools. Get back a review from "fresh eyes" with zero shared conversation history bias.
+
+**Message in a bottle.** Send a cmail to a machine you're about to wipe and rebuild. When it comes back online and the agent starts, your setup instructions are already waiting in the inbox.
+
+**Zero infrastructure.** Unlike Slack, email, or Pushover — cmail needs no accounts, no API keys, no cloud services, no signup. If you have Tailscale and SSH, you already have everything.
+
+**Nothing leaves your network.** Every message stays on your Tailnet. No third-party server ever sees your content. No metadata leaves your machines. For the privacy-conscious, this is the entire pitch.
+
+**Remote control from your phone.** SSH into any Tailscale node from your phone and run `cmail send server "deploy the latest build"`. The agent handles it. Lightweight remote tasking without a web UI.
+
+**Async pair programming with yourself.** Working on two branches across two machines? Send context, findings, and "watch out for X" notes between them. Your future self on the other machine gets full context the moment they open a session.
 
 ---
 
