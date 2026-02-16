@@ -9,6 +9,10 @@ UNREAD_MARKER="$COMMS_DIR/.has_unread"
 
 DEPS_CHECKED_MARKER="$COMMS_DIR/.deps_checked"
 
+# Resolve real script directory (follow symlinks)
+SCRIPT_REAL_PATH="$(readlink -f "$0" 2>/dev/null || python3 -c "import os; print(os.path.realpath('$0'))" 2>/dev/null || echo "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_REAL_PATH")" && pwd)"
+
 # --- Dependency Management ---
 
 detect_pkg_manager() {
@@ -828,8 +832,7 @@ notify_new_message() {
   echo "New message received: $(basename "$file")"
 
   # Trigger cmail-agent if enabled
-  local agent_script
-  agent_script="$(cd "$(dirname "$0")" && pwd)/cmail-agent.sh"
+  local agent_script="$SCRIPT_DIR/cmail-agent.sh"
   if [[ -f "$COMMS_DIR/.agent-enabled" ]] && [[ -x "$agent_script" ]]; then
     "$agent_script" >> "$COMMS_DIR/.agent/agent.log" 2>&1 &
   fi
