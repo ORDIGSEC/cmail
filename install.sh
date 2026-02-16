@@ -238,23 +238,40 @@ STATUSLINE_SCRIPT="$HOME/.claude/statusline-command.sh"
 CMAIL_MARKER="# cmail-statusline-start"
 
 if [[ -f "$STATUSLINE_SCRIPT" ]]; then
-  if grep -qF "$CMAIL_MARKER" "$STATUSLINE_SCRIPT" 2>/dev/null || grep -qF 'cmail_info' "$STATUSLINE_SCRIPT" 2>/dev/null; then
+  if grep -qF "$CMAIL_MARKER" "$STATUSLINE_SCRIPT" 2>/dev/null; then
     echo "cmail statusline already present, skipping."
   else
-    cat >> "$STATUSLINE_SCRIPT" <<'CMAIL_EOF'
-
-# cmail-statusline-start
+    CMAIL_BLOCK='# cmail-statusline-start
 # cmail inbox count (added by cmail installer)
-_cmail_count=$(ls -1 "$HOME/.cmail/inbox/"*.json 2>/dev/null | wc -l | tr -d ' ')
+_cmail_count=$(ls -1 "$HOME/.cmail/inbox/"*.json 2>/dev/null | wc -l | tr -d '"'"' '"'"')
 if (( _cmail_count > 0 )); then
-    _cmail_info=" \033[38;2;128;128;128m|\033[0m \033[1m(${_cmail_count})\033[22m cmail"
+    _cmail_info=" \\033[38;2;128;128;128m|\\033[0m \\033[1m(${_cmail_count})\\033[22m cmail"
 else
-    _cmail_info=" \033[38;2;128;128;128m|\033[0m \033[38;2;128;128;128m(0) cmail\033[0m"
+    _cmail_info=" \\033[38;2;128;128;128m|\\033[0m \\033[38;2;128;128;128m(0) cmail\\033[0m"
 fi
-# cmail-statusline-end
-CMAIL_EOF
-    echo "Added cmail count to statusline script."
-    echo "  Note: Add \${_cmail_info} to your status line output variable to display it."
+# cmail-statusline-end'
+
+    # Try to insert before the output line and wire into it
+    if grep -q '^line=' "$STATUSLINE_SCRIPT"; then
+      # Insert cmail block before the line= assignment, then append ${_cmail_info} to it
+      tmp_sl="$STATUSLINE_SCRIPT.tmp"
+      awk -v block="$CMAIL_BLOCK" '
+        /^line=/ && !done {
+          print block
+          print ""
+          # Append ${_cmail_info} to the line= value
+          sub(/"$/, "${_cmail_info}\"")
+          done=1
+        }
+        { print }
+      ' "$STATUSLINE_SCRIPT" > "$tmp_sl" && mv "$tmp_sl" "$STATUSLINE_SCRIPT"
+      echo "Added cmail count to statusline (auto-wired into output)."
+    else
+      # Fallback: append block and note for manual wiring
+      printf '\n%s\n' "$CMAIL_BLOCK" >> "$STATUSLINE_SCRIPT"
+      echo "Added cmail count to statusline script."
+      echo "  Note: Add \${_cmail_info} to your status line output variable to display it."
+    fi
   fi
 else
   echo "No statusline script found — status line integration skipped."
