@@ -1,12 +1,7 @@
 ---
 name: cmail
-description: Use when you need to send messages to or check messages from other Claude instances or humans on the Tailscale network. Triggers: "cmail", "message", "send to", "check inbox", "check messages", "check cmail", "communicate with", inter-agent coordination, "reply to".
-license: MIT
-compatibility: Linux, macOS
-metadata:
-  author: ORDIGSEC
-  version: "1.0"
-  repository: https://github.com/ORDIGSEC/cmail
+description: Send and receive messages between Claude Code instances across machines on a Tailscale network. File-based messaging with inbox monitoring, threading, and an optional auto-respond agent.
+license: Complete terms in LICENSE.txt
 allowed-tools:
   - Bash(cmail *)
   - Bash(~/.claude/skills/cmail/scripts/cmail.sh *)
@@ -34,33 +29,33 @@ The installer symlinks this skill into `~/.claude/skills/`, puts `cmail` on your
 
 | Command | Description |
 |---------|-------------|
-| `~/.claude/skills/cmail/scripts/cmail.sh send <host> "<message>"` | Send a message |
-| `~/.claude/skills/cmail/scripts/cmail.sh send <host> --subject "<subj>" "<message>"` | Send with subject |
-| `~/.claude/skills/cmail/scripts/cmail.sh inbox show` | List all messages (newest first) |
-| `~/.claude/skills/cmail/scripts/cmail.sh inbox show --if-new` | List only if new messages exist |
-| `~/.claude/skills/cmail/scripts/cmail.sh inbox clear` | Delete all messages (with confirmation) |
-| `~/.claude/skills/cmail/scripts/cmail.sh read <id>` | Read a specific message |
-| `~/.claude/skills/cmail/scripts/cmail.sh reply <id> "<message>"` | Reply preserving thread |
-| `~/.claude/skills/cmail/scripts/cmail.sh hosts` | List hosts + test connectivity |
-| `~/.claude/skills/cmail/scripts/cmail.sh setup` | Configure identity and hosts |
-| `~/.claude/skills/cmail/scripts/cmail.sh watch` | Background watcher for new messages |
-| `~/.claude/skills/cmail/scripts/cmail.sh deps` | Check and install dependencies |
+| `cmail send <host> "<message>"` | Send a message |
+| `cmail send <host> --subject "<subj>" "<message>"` | Send with subject |
+| `cmail inbox show` | List all messages (newest first) |
+| `cmail inbox show --if-new` | List only if new messages exist |
+| `cmail inbox clear` | Delete all messages (with confirmation) |
+| `cmail read <id>` | Read a specific message |
+| `cmail reply <id> "<message>"` | Reply preserving thread |
+| `cmail hosts` | List hosts + test connectivity |
+| `cmail setup` | Configure identity and hosts |
+| `cmail watch` | Background watcher for new messages |
+| `cmail deps` | Check and install dependencies |
 
 ## Usage Examples
 
 **Check your cmail (zero-cost, do this periodically):**
 ```bash
-~/.claude/skills/cmail/scripts/cmail.sh inbox show --if-new
+cmail inbox show --if-new
 ```
 
 **Send cmail to another machine:**
 ```bash
-~/.claude/skills/cmail/scripts/cmail.sh send dev-server "Found the bug — it's in auth.py line 42"
+cmail send dev-server "Found the bug — it's in auth.py line 42"
 ```
 
 **Reply to a cmail:**
 ```bash
-~/.claude/skills/cmail/scripts/cmail.sh reply <message-id> "Thanks, I'll take a look"
+cmail reply <message-id> "Thanks, I'll take a look"
 ```
 
 ## Message Format
