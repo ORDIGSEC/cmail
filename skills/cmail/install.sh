@@ -33,6 +33,7 @@ echo "Linked: $SKILL_DST -> $SKILL_SRC"
 
 # Make scripts executable
 chmod +x "$SKILL_SRC/scripts/cmail.sh"
+chmod +x "$SKILL_SRC/scripts/cmail-agent.sh"
 chmod +x "$HOOKS_SRC"/*.sh 2>/dev/null || true
 echo "Made scripts executable."
 
@@ -343,11 +344,20 @@ else
   echo "  To add manually, see: cmail setup"
 fi
 
-# --- Step 7: Enable agent ---
+# --- Step 7: Enable agent (opt-in) ---
 
 if [[ ! -f "$HOME/.cmail/.agent-enabled" ]]; then
-  touch "$HOME/.cmail/.agent-enabled"
-  echo "Enabled auto-respond agent."
+  echo ""
+  echo "The auto-respond agent uses 'claude --print' to automatically reply"
+  echo "to incoming messages. This uses API credits and grants the agent"
+  echo "tools (Bash, Edit, Write, Read) to fulfill requests."
+  read -r -p "Enable auto-respond agent? [y/N] " enable_agent
+  if [[ "$enable_agent" =~ ^[Yy]$ ]]; then
+    touch "$HOME/.cmail/.agent-enabled"
+    echo "Enabled auto-respond agent."
+  else
+    echo "Agent not enabled. Enable later with: touch ~/.cmail/.agent-enabled"
+  fi
 else
   echo "Agent already enabled."
 fi

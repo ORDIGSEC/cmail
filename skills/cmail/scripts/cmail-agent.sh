@@ -97,12 +97,12 @@ build_inbox_prompt() {
       subject="$(jq -r '.subject // ""' "$file")"
       body="$(jq -r '.body' "$file")"
     else
-      id="$(python3 -c "import json; print(json.load(open('$file'))['id'])")"
-      from="$(python3 -c "import json; print(json.load(open('$file'))['from'])")"
-      to="$(python3 -c "import json; print(json.load(open('$file'))['to'])")"
-      timestamp="$(python3 -c "import json; print(json.load(open('$file'))['timestamp'])")"
-      subject="$(python3 -c "import json; print(json.load(open('$file')).get('subject',''))")"
-      body="$(python3 -c "import json; print(json.load(open('$file'))['body'])")"
+      id="$(CMAIL_FILE="$file" python3 -c "import json,os; print(json.load(open(os.environ['CMAIL_FILE']))['id'])")"
+      from="$(CMAIL_FILE="$file" python3 -c "import json,os; print(json.load(open(os.environ['CMAIL_FILE']))['from'])")"
+      to="$(CMAIL_FILE="$file" python3 -c "import json,os; print(json.load(open(os.environ['CMAIL_FILE']))['to'])")"
+      timestamp="$(CMAIL_FILE="$file" python3 -c "import json,os; print(json.load(open(os.environ['CMAIL_FILE']))['timestamp'])")"
+      subject="$(CMAIL_FILE="$file" python3 -c "import json,os; print(json.load(open(os.environ['CMAIL_FILE'])).get('subject',''))")"
+      body="$(CMAIL_FILE="$file" python3 -c "import json,os; print(json.load(open(os.environ['CMAIL_FILE']))['body'])")"
     fi
     local short_id="${id:0:8}"
     prompt+="--- Message [${short_id}] ---\n"

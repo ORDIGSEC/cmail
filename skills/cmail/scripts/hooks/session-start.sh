@@ -11,7 +11,7 @@ if [[ ! -f "$UNREAD_MARKER" ]]; then
 fi
 
 # Count inbox messages
-count=$(ls -1 "$INBOX_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ')
+count=$(ls -1 "$INBOX_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ') || count=0
 if (( count == 0 )); then
   exit 0
 fi
@@ -24,9 +24,9 @@ for file in $(ls -1t "$INBOX_DIR"/*.json 2>/dev/null | head -5); do
     subject=$(jq -r '.subject // ""' "$file")
     timestamp=$(jq -r '.timestamp // ""' "$file")
   else
-    from=$(python3 -c "import json; print(json.load(open('$file')).get('from','unknown'))" 2>/dev/null || echo "unknown")
-    subject=$(python3 -c "import json; print(json.load(open('$file')).get('subject',''))" 2>/dev/null || echo "")
-    timestamp=$(python3 -c "import json; print(json.load(open('$file')).get('timestamp',''))" 2>/dev/null || echo "")
+    from=$(CMAIL_FILE="$file" python3 -c "import json,os; print(json.load(open(os.environ['CMAIL_FILE'])).get('from','unknown'))" 2>/dev/null || echo "unknown")
+    subject=$(CMAIL_FILE="$file" python3 -c "import json,os; print(json.load(open(os.environ['CMAIL_FILE'])).get('subject',''))" 2>/dev/null || echo "")
+    timestamp=$(CMAIL_FILE="$file" python3 -c "import json,os; print(json.load(open(os.environ['CMAIL_FILE'])).get('timestamp',''))" 2>/dev/null || echo "")
   fi
   entry="- ${timestamp} from ${from}"
   [[ -n "$subject" && "$subject" != "null" ]] && entry+=" — ${subject}"
@@ -39,7 +39,7 @@ context="You have ${count} cmail message(s) in your inbox. Run \`cmail inbox sho
 if command -v jq &>/dev/null; then
   jq -n --arg ctx "$context" '{"additionalContext": $ctx}'
 else
-  python3 -c "import json; print(json.dumps({'additionalContext': '''$context'''}))"
+  echo "$context" | python3 -c "import json,sys; print(json.dumps({'additionalContext': sys.stdin.read()}))"
 fi
 
 exit 0

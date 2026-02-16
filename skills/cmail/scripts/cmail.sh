@@ -174,6 +174,10 @@ generate_uuid() {
   fi
 }
 
+sanitize_filename_part() {
+  echo "$1" | tr -cd 'a-zA-Z0-9._-'
+}
+
 get_timestamp() {
   if date -u +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null; then
     return
@@ -193,7 +197,13 @@ json_get() {
   if command -v jq &>/dev/null; then
     jq -r "$query" "$file"
   else
-    python3 -c "import json,sys; data=json.load(open('$file')); print(eval('data' + ''.join('[\"' + k + '\"]' if not k.startswith('[') else k for k in '$query'.replace('.','.|').split('|')[1:])))" 2>/dev/null || echo "null"
+    CMAIL_FILE="$file" CMAIL_QUERY="$query" python3 -c "
+import json, os, functools
+with open(os.environ['CMAIL_FILE']) as f: data = json.load(f)
+keys = os.environ['CMAIL_QUERY'].strip('.').split('.')
+result = functools.reduce(lambda d, k: d[k] if isinstance(d, dict) else d[int(k)], keys, data)
+print(result)
+" 2>/dev/null || echo "null"
   fi
 }
 
@@ -202,7 +212,13 @@ json_get_str() {
   if command -v jq &>/dev/null; then
     echo "$str" | jq -r "$query"
   else
-    python3 -c "import json,sys; data=json.loads(sys.stdin.read()); exec('result = data' + ''.join('[\"' + k + '\"]' if not k.startswith('[') else k for k in '$query'.replace('.','.|').split('|')[1:])); print(result)" <<< "$str" 2>/dev/null || echo "null"
+    CMAIL_QUERY="$query" python3 -c "
+import json, sys, os, functools
+data = json.loads(sys.stdin.read())
+keys = os.environ['CMAIL_QUERY'].strip('.').split('.')
+result = functools.reduce(lambda d, k: d[k] if isinstance(d, dict) else d[int(k)], keys, data)
+print(result)
+" <<< "$str" 2>/dev/null || echo "null"
   fi
 }
 
@@ -212,11 +228,11 @@ get_host_address() {
   if command -v jq &>/dev/null; then
     jq -r ".hosts[\"$host\"].address // empty" "$CONFIG_FILE"
   else
-    python3 -c "
-import json
-with open('$CONFIG_FILE') as f:
+    CMAIL_CONFIG="$CONFIG_FILE" CMAIL_HOST="$host" python3 -c "
+import json, os
+with open(os.environ['CMAIL_CONFIG']) as f:
     data = json.load(f)
-addr = data.get('hosts', {}).get('$host', {}).get('address', '')
+addr = data.get('hosts', {}).get(os.environ['CMAIL_HOST'], {}).get('address', '')
 if addr: print(addr)
 "
   fi
@@ -228,11 +244,11 @@ get_host_ssh_method() {
   if command -v jq &>/dev/null; then
     jq -r ".hosts[\"$host\"].ssh_method // \"tailscale\"" "$CONFIG_FILE"
   else
-    python3 -c "
-import json
-with open('$CONFIG_FILE') as f:
+    CMAIL_CONFIG="$CONFIG_FILE" CMAIL_HOST="$host" python3 -c "
+import json, os
+with open(os.environ['CMAIL_CONFIG']) as f:
     data = json.load(f)
-method = data.get('hosts', {}).get('$host', {}).get('ssh_method', 'tailscale')
+method = data.get('hosts', {}).get(os.environ['CMAIL_HOST'], {}).get('ssh_method', 'tailscale')
 print(method)
 "
   fi
@@ -259,9 +275,9 @@ resolve_sender_to_host() {
   if command -v jq &>/dev/null; then
     hosts="$(jq -r '.hosts | keys[]' "$CONFIG_FILE" 2>/dev/null)" || true
   else
-    hosts="$(python3 -c "
-import json
-with open('$CONFIG_FILE') as f: data = json.load(f)
+    hosts="$(CMAIL_CONFIG="$CONFIG_FILE" python3 -c "
+import json, os
+with open(os.environ['CMAIL_CONFIG']) as f: data = json.load(f)
 for k in data.get('hosts', {}): print(k)
 " 2>/dev/null)" || true
   fi
@@ -291,14 +307,15 @@ auto_update_ssh_method() {
        if $name then .hosts[$name].ssh_method = "standard" else . end' \
       "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
   else
-    python3 -c "
-import json
-with open('$CONFIG_FILE', 'r') as f: data = json.load(f)
+    CMAIL_CONFIG="$CONFIG_FILE" CMAIL_ADDR="$addr" python3 -c "
+import json, os
+cfg = os.environ['CMAIL_CONFIG']
+with open(cfg, 'r') as f: data = json.load(f)
 for name, info in data.get('hosts', {}).items():
-    if info.get('address') == '$addr':
+    if info.get('address') == os.environ['CMAIL_ADDR']:
         info['ssh_method'] = 'standard'
         break
-with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
+with open(cfg, 'w') as f: json.dump(data, f, indent=2)
 " 2>/dev/null
   fi
 }
@@ -353,11 +370,12 @@ cmd_setup() {
     if command -v jq &>/dev/null; then
       jq --arg id "$new_identity" '.identity = $id' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
     else
-      python3 -c "
-import json
-with open('$CONFIG_FILE', 'r') as f: data = json.load(f)
-data['identity'] = '$new_identity'
-with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
+      CMAIL_CONFIG="$CONFIG_FILE" CMAIL_IDENTITY="$new_identity" python3 -c "
+import json, os
+cfg = os.environ['CMAIL_CONFIG']
+with open(cfg, 'r') as f: data = json.load(f)
+data['identity'] = os.environ['CMAIL_IDENTITY']
+with open(cfg, 'w') as f: json.dump(data, f, indent=2)
 "
     fi
     identity="$new_identity"
@@ -376,9 +394,9 @@ with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
   if command -v jq &>/dev/null; then
     existing_hosts="$(jq -r '.hosts | keys[]' "$CONFIG_FILE" 2>/dev/null)" || true
   else
-    existing_hosts="$(python3 -c "
-import json
-with open('$CONFIG_FILE') as f: data = json.load(f)
+    existing_hosts="$(CMAIL_CONFIG="$CONFIG_FILE" python3 -c "
+import json, os
+with open(os.environ['CMAIL_CONFIG']) as f: data = json.load(f)
 for k in data.get('hosts', {}): print(k)
 " 2>/dev/null)" || true
   fi
@@ -461,11 +479,13 @@ for k in data.get('hosts', {}): print(k)
               jq --arg name "$sel_name" --arg addr "$sel_name" --arg method "tailscale" \
                 '.hosts[$name] = {"address": $addr, "ssh_method": $method}' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
             else
-              python3 -c "
-import json
-with open('$CONFIG_FILE', 'r') as f: data = json.load(f)
-data.setdefault('hosts', {})['$sel_name'] = {'address': '$sel_name', 'ssh_method': 'tailscale'}
-with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
+              CMAIL_CONFIG="$CONFIG_FILE" CMAIL_HOST="$sel_name" python3 -c "
+import json, os
+cfg = os.environ['CMAIL_CONFIG']
+host = os.environ['CMAIL_HOST']
+with open(cfg, 'r') as f: data = json.load(f)
+data.setdefault('hosts', {})[host] = {'address': host, 'ssh_method': 'tailscale'}
+with open(cfg, 'w') as f: json.dump(data, f, indent=2)
 "
             fi
 
@@ -506,11 +526,14 @@ with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
       jq --arg name "$host_name" --arg addr "$host_addr" --arg method "$host_method" \
         '.hosts[$name] = {"address": $addr, "ssh_method": $method}' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
     else
-      python3 -c "
-import json
-with open('$CONFIG_FILE', 'r') as f: data = json.load(f)
-data.setdefault('hosts', {})['$host_name'] = {'address': '$host_addr', 'ssh_method': '$host_method'}
-with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
+      CMAIL_CONFIG="$CONFIG_FILE" CMAIL_HOST="$host_name" CMAIL_ADDR="$host_addr" CMAIL_METHOD="$host_method" python3 -c "
+import json, os
+cfg = os.environ['CMAIL_CONFIG']
+with open(cfg, 'r') as f: data = json.load(f)
+data.setdefault('hosts', {})[os.environ['CMAIL_HOST']] = {
+    'address': os.environ['CMAIL_ADDR'], 'ssh_method': os.environ['CMAIL_METHOD']
+}
+with open(cfg, 'w') as f: json.dump(data, f, indent=2)
 "
     fi
     echo "  Added: $host_name -> $host_addr ($host_method)"
@@ -697,7 +720,7 @@ CMAIL_EOF
   fi
   echo "  Hosts:       $host_count configured"
 
-  if [[ "$hooks_installed" == true ]] || [[ -f "$CLAUDE_SETTINGS" ]] && command -v jq &>/dev/null && jq -r '.hooks | .. | .command? // empty' "$CLAUDE_SETTINGS" 2>/dev/null | grep -q "cmail"; then
+  if [[ "$hooks_installed" == true ]] || { [[ -f "$CLAUDE_SETTINGS" ]] && command -v jq &>/dev/null && jq -r '.hooks | .. | .command? // empty' "$CLAUDE_SETTINGS" 2>/dev/null | grep -q "cmail"; }; then
     echo "  Hooks:       installed"
   else
     echo "  Hooks:       not installed"
@@ -769,7 +792,9 @@ cmd_send() {
   local file_timestamp
   file_timestamp="$(get_filename_timestamp)"
   local short_id="${msg_id:0:6}"
-  local filename="${file_timestamp}-${identity}-${short_id}.json"
+  local safe_identity
+  safe_identity="$(sanitize_filename_part "$identity")"
+  local filename="${file_timestamp}-${safe_identity}-${short_id}.json"
 
   [[ -z "$thread_id" ]] && thread_id="$msg_id"
 
@@ -787,17 +812,19 @@ cmd_send() {
       '{id: $id, from: $from, to: $to, timestamp: $ts, subject: $subj, body: $body, in_reply_to: ($reply | if . == "" then null else . end), thread_id: $thread}'
     )"
   else
-    json_msg="$(python3 -c "
-import json
+    json_msg="$(CMAIL_ID="$msg_id" CMAIL_FROM="$identity" CMAIL_TO="$host" \
+      CMAIL_TS="$timestamp" CMAIL_SUBJ="$subject" CMAIL_BODY="$message" \
+      CMAIL_REPLY="$in_reply_to" CMAIL_THREAD="$thread_id" python3 -c "
+import json, os
 msg = {
-    'id': '$msg_id',
-    'from': '$identity',
-    'to': '$host',
-    'timestamp': '$timestamp',
-    'subject': '$subject',
-    'body': $(python3 -c "import json; print(json.dumps('$message'))"),
-    'in_reply_to': $(if [[ -n "$in_reply_to" ]]; then echo "'$in_reply_to'"; else echo "None"; fi),
-    'thread_id': '$thread_id'
+    'id': os.environ['CMAIL_ID'],
+    'from': os.environ['CMAIL_FROM'],
+    'to': os.environ['CMAIL_TO'],
+    'timestamp': os.environ['CMAIL_TS'],
+    'subject': os.environ['CMAIL_SUBJ'],
+    'body': os.environ['CMAIL_BODY'],
+    'in_reply_to': os.environ['CMAIL_REPLY'] or None,
+    'thread_id': os.environ['CMAIL_THREAD']
 }
 print(json.dumps(msg, indent=2))
 ")"
@@ -997,7 +1024,7 @@ cmd_read() {
 }
 
 cmd_reply() {
-  local target_id="$1"
+  local target_id="${1:-}"
   shift || true
   local message=""
   local subject=""
@@ -1057,9 +1084,9 @@ cmd_hosts() {
   if command -v jq &>/dev/null; then
     hosts_json="$(jq -r '.hosts | to_entries[] | "\(.key)\t\(.value.address)\t\(.value.ssh_method // "tailscale")"' "$CONFIG_FILE" 2>/dev/null)" || true
   else
-    hosts_json="$(python3 -c "
-import json
-with open('$CONFIG_FILE') as f: data = json.load(f)
+    hosts_json="$(CMAIL_CONFIG="$CONFIG_FILE" python3 -c "
+import json, os
+with open(os.environ['CMAIL_CONFIG']) as f: data = json.load(f)
 for name, info in data.get('hosts', {}).items():
     print(f\"{name}\t{info['address']}\t{info.get('ssh_method', 'tailscale')}\")
 " 2>/dev/null)" || true
@@ -1136,11 +1163,13 @@ for name, info in data.get('hosts', {}).items():
               jq --arg name "$sel_name" --arg addr "$sel_name" --arg method "tailscale" \
                 '.hosts[$name] = {"address": $addr, "ssh_method": $method}' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
             else
-              python3 -c "
-import json
-with open('$CONFIG_FILE', 'r') as f: data = json.load(f)
-data.setdefault('hosts', {})['$sel_name'] = {'address': '$sel_name', 'ssh_method': 'tailscale'}
-with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
+              CMAIL_CONFIG="$CONFIG_FILE" CMAIL_HOST="$sel_name" python3 -c "
+import json, os
+cfg = os.environ['CMAIL_CONFIG']
+host = os.environ['CMAIL_HOST']
+with open(cfg, 'r') as f: data = json.load(f)
+data.setdefault('hosts', {})[host] = {'address': host, 'ssh_method': 'tailscale'}
+with open(cfg, 'w') as f: json.dump(data, f, indent=2)
 "
             fi
             echo "  Added: $sel_name (tailscale)"
