@@ -10,7 +10,27 @@ AGENT_STATE="$COMMS_DIR/.agent"
 SESSION_FILE="$AGENT_STATE/session_id"
 LOCK_FILE="$AGENT_STATE/.lock"
 LOG_FILE="$AGENT_STATE/agent.log"
-CLAUDE_PATH="${CMAIL_CLAUDE_PATH:-claude}"
+# Find claude binary
+find_claude() {
+  if [[ -n "${CMAIL_CLAUDE_PATH:-}" ]] && [[ -x "$CMAIL_CLAUDE_PATH" ]]; then
+    echo "$CMAIL_CLAUDE_PATH"
+    return
+  fi
+  for candidate in \
+    "$(command -v claude 2>/dev/null)" \
+    "$HOME/.local/bin/claude" \
+    "$HOME/.claude/local/claude" \
+    "/usr/local/bin/claude" \
+    ; do
+    if [[ -n "$candidate" ]] && [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return
+    fi
+  done
+  echo "claude"  # fallback, will fail with a clear error
+}
+
+CLAUDE_PATH="$(find_claude)"
 CLAUDE_TIMEOUT="${CMAIL_AGENT_TIMEOUT:-120}"
 CMAIL_SCRIPT="$(cd "$(dirname "$0")" && pwd)/cmail.sh"
 
@@ -119,6 +139,10 @@ Available cmail commands:
 Keep replies concise. You are responding via cmail, not a terminal — short, actionable messages work best.'
 
 # --- Main ---
+
+# Ensure cmail and claude are findable by subprocesses
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+
 main() {
   if ! acquire_lock; then
     exit 0
