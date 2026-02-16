@@ -92,9 +92,10 @@ fi
 mkdir -p "$HOME/.cmail/inbox" "$HOME/.cmail/outbox"
 echo "Created ~/.cmail/ directories."
 
-if [[ ! -f "$HOME/.cmail/config.json" ]]; then
+CONFIG_JSON="$HOME/.cmail/config.json"
+if [[ ! -f "$CONFIG_JSON" ]]; then
   IDENTITY="$(hostname | tr '[:upper:]' '[:lower:]' | sed 's/\.local$//')"
-  cat > "$HOME/.cmail/config.json" <<EOF
+  cat > "$CONFIG_JSON" <<EOF
 {
   "identity": "$IDENTITY",
   "hosts": {}
@@ -102,7 +103,71 @@ if [[ ! -f "$HOME/.cmail/config.json" ]]; then
 EOF
   echo "Created default config with identity: $IDENTITY"
 else
-  echo "Config already exists, skipping."
+  IDENTITY="$(jq -r '.identity // empty' "$CONFIG_JSON" 2>/dev/null || echo "")"
+  echo "Config already exists (identity: ${IDENTITY:-unknown}), skipping."
+fi
+
+# --- Step 3b: Auto-discover Tailscale hosts ---
+
+if command -v tailscale &>/dev/null && command -v jq &>/dev/null; then
+  echo ""
+  echo "Scanning Tailscale network for hosts..."
+  SELF_HOST="$(tailscale status --json 2>/dev/null | jq -r '.Self.HostName // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]')" || true
+
+  PEERS="$(tailscale status --json 2>/dev/null | jq -r '
+    .Peer | to_entries[] |
+    select(.value.OS != "iOS" and .value.OS != "android") |
+    "\(.value.HostName)\t\(.value.TailscaleIPs[0])\t\(.value.OS)\t\(.value.Online)"
+  ' 2>/dev/null)" || true
+
+  if [[ -n "$PEERS" ]]; then
+    EXISTING_HOSTS="$(jq -r '.hosts | keys[]' "$CONFIG_JSON" 2>/dev/null | tr '[:upper:]' '[:lower:]')" || true
+    PEER_NAMES=() PEER_INFO=()
+
+    while IFS=$'\t' read -r p_name p_ip p_os p_online; do
+      p_lower="$(echo "$p_name" | tr '[:upper:]' '[:lower:]')"
+      [[ "$p_lower" == "$SELF_HOST" ]] && continue
+      [[ "$p_lower" == "${IDENTITY:-}" ]] && continue
+      echo "$EXISTING_HOSTS" | grep -qx "$p_lower" 2>/dev/null && continue
+
+      status_str="offline"
+      [[ "$p_online" == "true" ]] && status_str="online"
+      PEER_NAMES+=("$p_lower")
+      PEER_INFO+=("$p_name ($p_os, $status_str, $p_ip)")
+    done <<< "$PEERS"
+
+    if [[ ${#PEER_NAMES[@]} -gt 0 ]]; then
+      echo ""
+      echo "Found ${#PEER_NAMES[@]} host(s) on your Tailscale network:"
+      echo ""
+      for i in "${!PEER_INFO[@]}"; do
+        echo "  $((i+1))) ${PEER_INFO[$i]}"
+      done
+      echo "  0) Skip — don't add any"
+      echo ""
+      echo "Enter numbers to add, separated by spaces (e.g. 1 3):"
+      read -r -p "> " selections
+
+      for sel in $selections; do
+        [[ "$sel" == "0" ]] && break
+        idx=$((sel - 1))
+        if [[ $idx -ge 0 && $idx -lt ${#PEER_NAMES[@]} ]]; then
+          sel_name="${PEER_NAMES[$idx]}"
+          jq --arg name "$sel_name" --arg addr "$sel_name" --arg method "tailscale" \
+            '.hosts[$name] = {"address": $addr, "ssh_method": $method}' "$CONFIG_JSON" > "$CONFIG_JSON.tmp" && mv "$CONFIG_JSON.tmp" "$CONFIG_JSON"
+          echo "  Added: $sel_name (tailscale)"
+        fi
+      done
+    else
+      echo "All Tailscale peers already configured."
+    fi
+  else
+    echo "No peers found on Tailscale network."
+  fi
+else
+  if ! command -v tailscale &>/dev/null; then
+    echo "Note: Tailscale not found — skipping host auto-discovery. Run 'cmail setup' to add hosts later."
+  fi
 fi
 
 # --- Step 4: Auto-start watcher in shell profile ---

@@ -341,7 +341,7 @@ for k in data.get('hosts', {}): print(k)
   fi
 
   if [[ -n "$existing_hosts" ]]; then
-    echo "  Existing hosts:"
+    echo "  Already configured:"
     while IFS= read -r h; do
       local addr
       addr="$(get_host_address "$h")"
@@ -352,14 +352,105 @@ for k in data.get('hosts', {}): print(k)
     echo ""
   fi
 
-  echo "  Add remote machines you want to message."
-  echo "  Leave name blank when done."
+  # Auto-discover Tailscale peers
+  local discovered=false
+  if command -v tailscale &>/dev/null; then
+    echo "  Scanning Tailscale network..."
+    local self_host
+    self_host="$(tailscale status --json 2>/dev/null | jq -r '.Self.HostName // empty' 2>/dev/null)" || true
+    self_host="$(echo "$self_host" | tr '[:upper:]' '[:lower:]')"
+
+    local peers=""
+    if command -v jq &>/dev/null; then
+      peers="$(tailscale status --json 2>/dev/null | jq -r '
+        .Peer | to_entries[] |
+        select(.value.OS != "iOS" and .value.OS != "android") |
+        "\(.value.HostName)\t\(.value.TailscaleIPs[0])\t\(.value.OS)\t\(.value.Online)"
+      ' 2>/dev/null)" || true
+    fi
+
+    if [[ -n "$peers" ]]; then
+      # Build arrays of discoverable peers (exclude self and already-configured)
+      local peer_names=() peer_ips=() peer_info=()
+      while IFS=$'\t' read -r p_name p_ip p_os p_online; do
+        local p_lower
+        p_lower="$(echo "$p_name" | tr '[:upper:]' '[:lower:]')"
+        # Skip self
+        [[ "$p_lower" == "$self_host" ]] && continue
+        [[ "$p_lower" == "$identity" ]] && continue
+        # Skip already configured
+        local already=false
+        if [[ -n "$existing_hosts" ]]; then
+          while IFS= read -r eh; do
+            [[ "$(echo "$eh" | tr '[:upper:]' '[:lower:]')" == "$p_lower" ]] && { already=true; break; }
+          done <<< "$existing_hosts"
+        fi
+        [[ "$already" == true ]] && continue
+
+        local status_str="offline"
+        [[ "$p_online" == "true" ]] && status_str="online"
+        peer_names+=("$p_lower")
+        peer_ips+=("$p_ip")
+        peer_info+=("$p_name ($p_os, $status_str, $p_ip)")
+      done <<< "$peers"
+
+      if [[ ${#peer_names[@]} -gt 0 ]]; then
+        discovered=true
+        echo ""
+        echo "  Found ${#peer_names[@]} host(s) on your Tailscale network:"
+        echo ""
+        for i in "${!peer_info[@]}"; do
+          echo "    $((i+1))) ${peer_info[$i]}"
+        done
+        echo "    0) Skip — don't add any"
+        echo ""
+        echo "  Enter numbers to add, separated by spaces (e.g. 1 3):"
+        read -r -p "  > " selections </dev/tty 2>/dev/null || selections=""
+
+        for sel in $selections; do
+          [[ "$sel" == "0" ]] && break
+          local idx=$((sel - 1))
+          if [[ $idx -ge 0 && $idx -lt ${#peer_names[@]} ]]; then
+            local sel_name="${peer_names[$idx]}"
+            local sel_ip="${peer_ips[$idx]}"
+
+            if command -v jq &>/dev/null; then
+              jq --arg name "$sel_name" --arg addr "$sel_name" --arg method "tailscale" \
+                '.hosts[$name] = {"address": $addr, "ssh_method": $method}' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+            else
+              python3 -c "
+import json
+with open('$CONFIG_FILE', 'r') as f: data = json.load(f)
+data.setdefault('hosts', {})['$sel_name'] = {'address': '$sel_name', 'ssh_method': 'tailscale'}
+with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
+"
+            fi
+
+            echo "  Testing $sel_name..."
+            if ssh_exec "$sel_name" "tailscale" "echo ok" &>/dev/null; then
+              echo "    Added: $sel_name (connected!)"
+            else
+              echo "    Added: $sel_name (could not connect — check Tailscale SSH)"
+            fi
+          fi
+        done
+      else
+        echo "  All Tailscale peers already configured."
+      fi
+    else
+      echo "  No peers found on Tailscale network."
+    fi
+  else
+    echo "  Tailscale not found — skipping auto-discovery."
+  fi
+
+  # Offer manual entry as fallback
   echo ""
-  while true; do
-    read -r -p "  Host name: " host_name </dev/tty 2>/dev/null || host_name=""
-    [[ -z "$host_name" ]] && break
-    read -r -p "  Address (Tailscale hostname or IP): " host_addr </dev/tty 2>/dev/null || host_addr=""
-    [[ -z "$host_addr" ]] && { echo "  Address required, skipping."; continue; }
+  echo "  Add a host manually? (e.g. non-Tailscale SSH host)"
+  read -r -p "  Host name (Enter to skip): " host_name </dev/tty 2>/dev/null || host_name=""
+  while [[ -n "$host_name" ]]; do
+    read -r -p "  Address (hostname or IP): " host_addr </dev/tty 2>/dev/null || host_addr=""
+    [[ -z "$host_addr" ]] && { echo "  Address required, skipping."; break; }
 
     echo "  SSH method:"
     echo "    1) tailscale — uses 'tailscale ssh' (no keys needed)"
@@ -381,13 +472,7 @@ with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
     fi
     echo "  Added: $host_name -> $host_addr ($host_method)"
 
-    echo "  Testing connection..."
-    if ssh_exec "$host_addr" "$host_method" "echo ok" &>/dev/null; then
-      echo "  Connected!"
-    else
-      echo "  Could not connect. Check address and SSH config."
-    fi
-    echo ""
+    read -r -p "  Add another? Host name (Enter to skip): " host_name </dev/tty 2>/dev/null || host_name=""
   done
 
   # --- 3. Hooks ---
@@ -805,19 +890,89 @@ for name, info in data.get('hosts', {}).items():
   fi
 
   if [[ -z "$hosts_json" ]]; then
-    echo "No hosts configured. Run 'cmail setup' to add hosts."
-    return 0
+    echo "No hosts configured."
+    echo ""
+  else
+    printf "  %-20s %-30s %-12s %s\n" "NAME" "ADDRESS" "METHOD" "STATUS"
+    printf "  %-20s %-30s %-12s %s\n" "────" "───────" "──────" "──────"
+    while IFS=$'\t' read -r name address method; do
+      local status="testing..."
+      if ssh_exec "$address" "$method" "echo ok" &>/dev/null; then
+        status="reachable"
+      else
+        status="unreachable"
+      fi
+      printf "  %-20s %-30s %-12s %s\n" "$name" "$address" "$method" "$status"
+    done <<< "$hosts_json"
+    echo ""
   fi
 
-  while IFS=$'\t' read -r name address method; do
-    local status="testing..."
-    if ssh_exec "$address" "$method" "echo ok" &>/dev/null; then
-      status="reachable"
-    else
-      status="unreachable"
+  # Scan Tailscale for new hosts not yet in config
+  if command -v tailscale &>/dev/null && command -v jq &>/dev/null; then
+    local self_host
+    self_host="$(tailscale status --json 2>/dev/null | jq -r '.Self.HostName // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]')" || true
+    local identity
+    identity="$(json_get "$CONFIG_FILE" '.identity' 2>/dev/null | tr '[:upper:]' '[:lower:]')" || true
+
+    local peers
+    peers="$(tailscale status --json 2>/dev/null | jq -r '
+      .Peer | to_entries[] |
+      select(.value.OS != "iOS" and .value.OS != "android") |
+      "\(.value.HostName)\t\(.value.TailscaleIPs[0])\t\(.value.OS)\t\(.value.Online)"
+    ' 2>/dev/null)" || true
+
+    if [[ -n "$peers" ]]; then
+      local existing_lower=""
+      if [[ -n "$hosts_json" ]]; then
+        existing_lower="$(echo "$hosts_json" | cut -f1 | tr '[:upper:]' '[:lower:]')"
+      fi
+
+      local new_names=() new_info=()
+      while IFS=$'\t' read -r p_name p_ip p_os p_online; do
+        local p_lower
+        p_lower="$(echo "$p_name" | tr '[:upper:]' '[:lower:]')"
+        [[ "$p_lower" == "$self_host" ]] && continue
+        [[ "$p_lower" == "$identity" ]] && continue
+        echo "$existing_lower" | grep -qx "$p_lower" 2>/dev/null && continue
+
+        local status_str="offline"
+        [[ "$p_online" == "true" ]] && status_str="online"
+        new_names+=("$p_lower")
+        new_info+=("$p_name ($p_os, $status_str, $p_ip)")
+      done <<< "$peers"
+
+      if [[ ${#new_names[@]} -gt 0 ]]; then
+        echo "=== New hosts on Tailscale ==="
+        echo ""
+        for i in "${!new_info[@]}"; do
+          echo "  $((i+1))) ${new_info[$i]}"
+        done
+        echo "  0) Skip"
+        echo ""
+        read -r -p "Add hosts (e.g. 1 3): " selections </dev/tty 2>/dev/null || selections=""
+
+        for sel in $selections; do
+          [[ "$sel" == "0" ]] && break
+          local idx=$((sel - 1))
+          if [[ $idx -ge 0 && $idx -lt ${#new_names[@]} ]]; then
+            local sel_name="${new_names[$idx]}"
+            if command -v jq &>/dev/null; then
+              jq --arg name "$sel_name" --arg addr "$sel_name" --arg method "tailscale" \
+                '.hosts[$name] = {"address": $addr, "ssh_method": $method}' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+            else
+              python3 -c "
+import json
+with open('$CONFIG_FILE', 'r') as f: data = json.load(f)
+data.setdefault('hosts', {})['$sel_name'] = {'address': '$sel_name', 'ssh_method': 'tailscale'}
+with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
+"
+            fi
+            echo "  Added: $sel_name (tailscale)"
+          fi
+        done
+      fi
     fi
-    printf "%-20s %-35s %-12s %s\n" "$name" "$address" "$method" "$status"
-  done <<< "$hosts_json"
+  fi
 }
 
 notify_new_message() {
@@ -994,44 +1149,216 @@ cmd_agent() {
   esac
 }
 
+# --- Help text ---
+
+show_usage() {
+  echo "cmail — File-based messaging over Tailscale SSH"
+  echo ""
+  echo "USAGE: cmail <command> [options]"
+  echo ""
+  echo "COMMANDS:"
+  echo "  send      Send a message to a remote host"
+  echo "  inbox     List messages in your inbox"
+  echo "  read      Read a specific message"
+  echo "  reply     Reply to a message (preserves threading)"
+  echo "  hosts     List configured hosts and scan for new ones"
+  echo "  setup     Interactive setup wizard"
+  echo "  watch     Background watcher for incoming messages"
+  echo "  agent     Auto-respond agent (uses claude --print)"
+  echo "  deps      Check and install dependencies"
+  echo ""
+  echo "Run 'cmail <command> --help' for details on a specific command."
+}
+
+show_send_help() {
+  echo "Send a message to a remote host"
+  echo ""
+  echo "USAGE: cmail send <host> [options] <message>"
+  echo ""
+  echo "ARGUMENTS:"
+  echo "  <host>       Name of the remote host (as configured)"
+  echo "  <message>    Message body text"
+  echo ""
+  echo "OPTIONS:"
+  echo "  --subject <text>   Add a subject line"
+  echo "  -h, --help         Show this help"
+  echo ""
+  echo "EXAMPLES:"
+  echo "  cmail send biggirl \"How's the build going?\""
+  echo "  cmail send smoke --subject \"Deploy\" \"Ready to push to prod\""
+}
+
+show_inbox_help() {
+  echo "List messages in your inbox"
+  echo ""
+  echo "USAGE: cmail inbox [options]"
+  echo ""
+  echo "OPTIONS:"
+  echo "  --if-new     Only show messages if there are unread ones"
+  echo "  -h, --help   Show this help"
+  echo ""
+  echo "EXAMPLES:"
+  echo "  cmail inbox"
+  echo "  cmail inbox --if-new"
+}
+
+show_read_help() {
+  echo "Read a specific message"
+  echo ""
+  echo "USAGE: cmail read <id>"
+  echo ""
+  echo "ARGUMENTS:"
+  echo "  <id>   Message ID or prefix (first 8 chars is enough)"
+  echo ""
+  echo "OPTIONS:"
+  echo "  -h, --help   Show this help"
+}
+
+show_reply_help() {
+  echo "Reply to a message (preserves threading)"
+  echo ""
+  echo "USAGE: cmail reply <id> [options] <message>"
+  echo ""
+  echo "ARGUMENTS:"
+  echo "  <id>         Message ID to reply to"
+  echo "  <message>    Reply body text"
+  echo ""
+  echo "OPTIONS:"
+  echo "  --subject <text>   Override the subject line"
+  echo "  -h, --help         Show this help"
+  echo ""
+  echo "EXAMPLES:"
+  echo "  cmail reply a9c1c8d6 \"Got it, thanks!\""
+}
+
+show_hosts_help() {
+  echo "List configured hosts and scan for new Tailscale peers"
+  echo ""
+  echo "USAGE: cmail hosts"
+  echo ""
+  echo "Shows all configured hosts with connectivity status, then"
+  echo "scans the Tailscale network for new hosts you can add."
+  echo ""
+  echo "OPTIONS:"
+  echo "  -h, --help   Show this help"
+}
+
+show_watch_help() {
+  echo "Background watcher for incoming messages"
+  echo ""
+  echo "USAGE: cmail watch [options]"
+  echo ""
+  echo "Watches ~/.cmail/inbox/ for new messages and sends desktop"
+  echo "notifications. Triggers the auto-respond agent if enabled."
+  echo ""
+  echo "OPTIONS:"
+  echo "  --daemon     Run silently, exit if already running"
+  echo "  -h, --help   Show this help"
+}
+
+show_agent_help() {
+  echo "Auto-respond agent (uses claude --print)"
+  echo ""
+  echo "USAGE: cmail agent <subcommand>"
+  echo ""
+  echo "SUBCOMMANDS:"
+  echo "  on       Enable auto-respond (watcher triggers agent on new messages)"
+  echo "  off      Disable auto-respond"
+  echo "  status   Show agent status, session, and config"
+  echo "  log      Show recent agent log entries"
+  echo "  reset    Clear session and lock file"
+  echo "  run      Manually trigger agent now"
+  echo ""
+  echo "OPTIONS:"
+  echo "  -h, --help   Show this help"
+  echo ""
+  echo "ENVIRONMENT:"
+  echo "  CMAIL_AGENT_MODEL     Model to use (default: claude-sonnet-4-5-20250929)"
+  echo "  CMAIL_AGENT_TIMEOUT   Timeout in seconds (default: 120)"
+  echo "  CMAIL_CLAUDE_PATH     Path to claude binary"
+}
+
+show_deps_help() {
+  echo "Check and install dependencies"
+  echo ""
+  echo "USAGE: cmail deps"
+  echo ""
+  echo "Checks for required tools (jq, fswatch/inotifywait, ssh,"
+  echo "tailscale) and offers to install missing ones."
+  echo ""
+  echo "OPTIONS:"
+  echo "  -h, --help   Show this help"
+}
+
+show_setup_help() {
+  echo "Interactive setup wizard"
+  echo ""
+  echo "USAGE: cmail setup"
+  echo ""
+  echo "Walks through 5 steps:"
+  echo "  1. Identity     — set your hostname for messaging"
+  echo "  2. Remote Hosts — auto-discover Tailscale peers or add manually"
+  echo "  3. Hooks        — install Claude Code hooks for message awareness"
+  echo "  4. Status Line  — add inbox count to Claude Code status line"
+  echo "  5. Watcher      — start the background inbox watcher"
+  echo ""
+  echo "OPTIONS:"
+  echo "  -h, --help   Show this help"
+}
+
+# Check if first arg is a help flag
+is_help_flag() {
+  [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]
+}
+
 # --- Main ---
 
-cmd="${1:-help}"
+cmd="${1:-}"
 shift || true
 
-# Auto-check deps on first run (skip for help/deps to avoid chicken-and-egg)
-if [[ "$cmd" != "help" && "$cmd" != "--help" && "$cmd" != "-h" && "$cmd" != "deps" ]]; then
+# No command = show usage (Mullvad-style, no error)
+if [[ -z "$cmd" || "$cmd" == "help" || "$cmd" == "--help" || "$cmd" == "-h" ]]; then
+  show_usage
+  exit 0
+fi
+
+# Auto-check deps on first run (skip for deps to avoid chicken-and-egg)
+if [[ "$cmd" != "deps" ]]; then
   check_deps
 fi
 
 case "$cmd" in
-  setup)   cmd_setup "$@" ;;
-  send)    cmd_send "$@" ;;
-  inbox)   cmd_inbox "$@" ;;
-  read)    cmd_read "$@" ;;
-  reply)   cmd_reply "$@" ;;
-  hosts)   cmd_hosts "$@" ;;
-  watch)   cmd_watch "$@" ;;
-  agent)   cmd_agent "$@" ;;
-  deps)    cmd_deps "$@" ;;
-  help|--help|-h)
-    echo "cmail — File-based messaging over Tailscale SSH"
-    echo ""
-    echo "Commands:"
-    echo "  setup                          Configure identity and hosts"
-    echo "  send <host> [--subject s] msg  Send a message"
-    echo "  inbox [--if-new]               List inbox messages"
-    echo "  read <id>                      Read a message"
-    echo "  reply <id> [--subject s] msg   Reply to a message"
-    echo "  hosts                          List hosts + test connectivity"
-    echo "  watch                          Watch for new messages"
-    echo "  agent [on|off|status|log|run]  Auto-respond agent"
-    echo "  deps                           Check and install dependencies"
-    echo "  help                           Show this help"
-    ;;
+  setup)
+    if is_help_flag "${1:-}"; then show_setup_help; exit 0; fi
+    cmd_setup "$@" ;;
+  send)
+    if is_help_flag "${1:-}" || [[ $# -eq 0 ]]; then show_send_help; exit 0; fi
+    cmd_send "$@" ;;
+  inbox)
+    if is_help_flag "${1:-}"; then show_inbox_help; exit 0; fi
+    cmd_inbox "$@" ;;
+  read)
+    if is_help_flag "${1:-}" || [[ $# -eq 0 ]]; then show_read_help; exit 0; fi
+    cmd_read "$@" ;;
+  reply)
+    if is_help_flag "${1:-}" || [[ $# -eq 0 ]]; then show_reply_help; exit 0; fi
+    cmd_reply "$@" ;;
+  hosts)
+    if is_help_flag "${1:-}"; then show_hosts_help; exit 0; fi
+    cmd_hosts "$@" ;;
+  watch)
+    if is_help_flag "${1:-}"; then show_watch_help; exit 0; fi
+    cmd_watch "$@" ;;
+  agent)
+    if is_help_flag "${1:-}" || [[ $# -eq 0 ]]; then show_agent_help; exit 0; fi
+    cmd_agent "$@" ;;
+  deps)
+    if is_help_flag "${1:-}"; then show_deps_help; exit 0; fi
+    cmd_deps "$@" ;;
   *)
-    echo "Unknown command: $cmd" >&2
-    echo "Run 'cmail help' for usage." >&2
+    echo "Unknown command: $cmd"
+    echo ""
+    show_usage
     exit 1
     ;;
 esac
