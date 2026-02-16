@@ -89,7 +89,7 @@ fi
 
 # --- Step 3: Initialize ~/.cmail/ structure ---
 
-mkdir -p "$HOME/.cmail/inbox" "$HOME/.cmail/outbox"
+mkdir -p "$HOME/.cmail/inbox" "$HOME/.cmail/outbox" "$HOME/.cmail/.agent"
 echo "Created ~/.cmail/ directories."
 
 CONFIG_JSON="$HOME/.cmail/config.json"

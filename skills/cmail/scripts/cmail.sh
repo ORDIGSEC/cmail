@@ -1173,6 +1173,7 @@ notify_new_message() {
   # Trigger cmail-agent if enabled
   local agent_script="$SCRIPT_DIR/cmail-agent.sh"
   if [[ -f "$COMMS_DIR/.agent-enabled" ]] && [[ -x "$agent_script" ]]; then
+    mkdir -p "$COMMS_DIR/.agent"
     "$agent_script" >> "$COMMS_DIR/.agent/agent.log" 2>&1 &
   fi
 }
