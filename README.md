@@ -51,8 +51,8 @@ cmail is a Claude Code skill that enables messaging between:
 
 ### 1. Clone the repo
 ```bash
-git clone https://github.com/ORDIGSEC/claudeComms.git
-cd claudeComms
+git clone https://github.com/ORDIGSEC/cmail.git
+cd cmail
 ```
 
 ### 2. Run the installer
@@ -398,7 +398,7 @@ cmail send dev-server.tail1234.ts.net "Quick test message"
 
 ## Contributing
 
-Issues and PRs welcome at [github.com/ORDIGSEC/claudeComms](https://github.com/ORDIGSEC/claudeComms).
+Issues and PRs welcome at [github.com/ORDIGSEC/cmail](https://github.com/ORDIGSEC/cmail).
 
 **Priority improvements:**
 1. BSD/kqueue support for `watch` command
