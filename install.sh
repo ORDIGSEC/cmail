@@ -99,6 +99,45 @@ else
   echo "  $WATCH_LINE"
 fi
 
+# Add cmail count to Claude Code status line
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+STATUSLINE_SCRIPT="$HOME/.claude/statusline-command.sh"
+CMAIL_MARKER="# cmail-statusline-start"
+
+if [[ -f "$STATUSLINE_SCRIPT" ]]; then
+  # Existing statusline script — inject cmail snippet if not already present
+  if ! grep -qF "$CMAIL_MARKER" "$STATUSLINE_SCRIPT" 2>/dev/null; then
+    # Insert cmail count block before the final line-building section
+    # We look for the "Build single-line prompt" or the final printf and inject before it
+    if grep -qF 'cmail_info' "$STATUSLINE_SCRIPT" 2>/dev/null; then
+      echo "cmail statusline already present, skipping."
+    else
+      cat >> "$STATUSLINE_SCRIPT" <<'CMAIL_EOF'
+
+# cmail-statusline-start
+# cmail inbox count (added by cmail installer)
+_cmail_count=$(ls -1 "$HOME/.cmail/inbox/"*.json 2>/dev/null | wc -l | tr -d ' ')
+if (( _cmail_count > 0 )); then
+    _cmail_info=" \033[38;2;128;128;128m|\033[0m \033[1m(${_cmail_count})\033[22m cmail"
+else
+    _cmail_info=" \033[38;2;128;128;128m|\033[0m \033[38;2;128;128;128m(0) cmail\033[0m"
+fi
+# cmail-statusline-end
+CMAIL_EOF
+      echo "Added cmail count to statusline script."
+      echo "Note: You may need to manually add \${_cmail_info} to your status line output variable."
+    fi
+  else
+    echo "cmail statusline snippet already present, skipping."
+  fi
+elif [[ -f "$CLAUDE_SETTINGS" ]]; then
+  echo "Note: No statusline script found. To see cmail count in your Claude Code status line,"
+  echo "  add this to your statusline script:"
+  echo '  cmail_count=$(ls -1 "$HOME/.cmail/inbox/"*.json 2>/dev/null | wc -l | tr -d '"'"' '"'"')'
+else
+  echo "Note: No Claude Code settings found. Status line integration skipped."
+fi
+
 # Start the watcher now
 "$SKILL_SRC/scripts/cmail.sh" watch --daemon &>/dev/null &
 echo "Started cmail watcher (PID: $!)."

@@ -67,6 +67,7 @@ This will:
 - Make the main script executable
 - Add `cmail watch --daemon` to your shell profile (`.zshrc`, `.bashrc`, or `.bash_profile`) so the inbox watcher starts automatically on every new shell session
 - Start the watcher immediately
+- Add a `(N) cmail` inbox count to your Claude Code status line (if a statusline script exists)
 
 ### 3. Repeat on every machine
 Run the installer on each machine where you want cmail available (both sending and receiving).
