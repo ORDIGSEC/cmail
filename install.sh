@@ -4,11 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_SRC="$SCRIPT_DIR/skills/cmail"
 SKILL_DST="$HOME/.claude/skills/cmail"
+HOOKS_SRC="$SKILL_SRC/scripts/hooks"
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
 echo "=== cmail Installer ==="
 echo ""
 
-# Symlink skill into ~/.claude/skills/
+# --- Step 1: Symlink skill into ~/.claude/skills/ ---
+
 mkdir -p "$HOME/.claude/skills"
 
 if [[ -L "$SKILL_DST" ]]; then
@@ -28,11 +31,13 @@ fi
 ln -s "$SKILL_SRC" "$SKILL_DST"
 echo "Linked: $SKILL_DST -> $SKILL_SRC"
 
-# Make script executable
+# Make scripts executable
 chmod +x "$SKILL_SRC/scripts/cmail.sh"
-echo "Made cmail.sh executable."
+chmod +x "$HOOKS_SRC"/*.sh 2>/dev/null || true
+echo "Made scripts executable."
 
-# Install cmail to PATH so it's available globally (even in sandboxed Claude sessions)
+# --- Step 2: Install cmail to PATH ---
+
 BIN_DIR="/usr/local/bin"
 LINK_OK=false
 if [[ -w "$BIN_DIR" ]]; then
@@ -56,11 +61,11 @@ else
   fi
 fi
 
-# Initialize ~/.cmail/ structure
+# --- Step 3: Initialize ~/.cmail/ structure ---
+
 mkdir -p "$HOME/.cmail/inbox" "$HOME/.cmail/outbox"
 echo "Created ~/.cmail/ directories."
 
-# Create default config if it doesn't exist
 if [[ ! -f "$HOME/.cmail/config.json" ]]; then
   IDENTITY="$(hostname | tr '[:upper:]' '[:lower:]' | sed 's/\.local$//')"
   cat > "$HOME/.cmail/config.json" <<EOF
@@ -74,7 +79,8 @@ else
   echo "Config already exists, skipping."
 fi
 
-# Auto-start watcher in shell profile
+# --- Step 4: Auto-start watcher in shell profile ---
+
 WATCH_LINE='command -v cmail &>/dev/null && cmail watch --daemon &>/dev/null &'
 SHELL_RC=""
 if [[ -f "$HOME/.zshrc" ]]; then
@@ -99,20 +105,68 @@ else
   echo "  $WATCH_LINE"
 fi
 
-# Add cmail count to Claude Code status line
-CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+# --- Step 5: Register Claude Code hooks ---
+
+install_hooks() {
+  if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
+    echo "No Claude Code settings found at $CLAUDE_SETTINGS — skipping hooks."
+    return 0
+  fi
+
+  if ! command -v jq &>/dev/null; then
+    echo "jq not found — skipping hooks registration. Install jq and re-run, or add hooks manually."
+    return 0
+  fi
+
+  local session_start="$HOOKS_SRC/session-start.sh"
+  local user_prompt="$HOOKS_SRC/user-prompt-submit.sh"
+  local stop_hook="$HOOKS_SRC/stop.sh"
+
+  # Check if cmail hooks are already registered
+  if jq -e '.hooks' "$CLAUDE_SETTINGS" &>/dev/null; then
+    if jq -r '.hooks | .. | .command? // empty' "$CLAUDE_SETTINGS" 2>/dev/null | grep -q "cmail"; then
+      echo "cmail hooks already registered, skipping."
+      return 0
+    fi
+  fi
+
+  # Merge hooks into existing settings (preserving everything else)
+  local tmp="$CLAUDE_SETTINGS.tmp"
+  jq --arg ss "$session_start" --arg up "$user_prompt" --arg st "$stop_hook" '
+    # Ensure hooks object exists
+    .hooks //= {} |
+
+    # Add SessionStart hook
+    .hooks.SessionStart = (.hooks.SessionStart // []) + [{
+      "hooks": [{"type": "command", "command": $ss, "timeout": 10}]
+    }] |
+
+    # Add UserPromptSubmit hook
+    .hooks.UserPromptSubmit = (.hooks.UserPromptSubmit // []) + [{
+      "hooks": [{"type": "command", "command": $up, "timeout": 5}]
+    }] |
+
+    # Add Stop hook
+    .hooks.Stop = (.hooks.Stop // []) + [{
+      "hooks": [{"type": "command", "command": $st, "timeout": 10}]
+    }]
+  ' "$CLAUDE_SETTINGS" > "$tmp" && mv "$tmp" "$CLAUDE_SETTINGS"
+
+  echo "Registered Claude Code hooks (SessionStart, UserPromptSubmit, Stop)."
+}
+
+install_hooks
+
+# --- Step 6: Status line integration ---
+
 STATUSLINE_SCRIPT="$HOME/.claude/statusline-command.sh"
 CMAIL_MARKER="# cmail-statusline-start"
 
 if [[ -f "$STATUSLINE_SCRIPT" ]]; then
-  # Existing statusline script — inject cmail snippet if not already present
-  if ! grep -qF "$CMAIL_MARKER" "$STATUSLINE_SCRIPT" 2>/dev/null; then
-    # Insert cmail count block before the final line-building section
-    # We look for the "Build single-line prompt" or the final printf and inject before it
-    if grep -qF 'cmail_info' "$STATUSLINE_SCRIPT" 2>/dev/null; then
-      echo "cmail statusline already present, skipping."
-    else
-      cat >> "$STATUSLINE_SCRIPT" <<'CMAIL_EOF'
+  if grep -qF "$CMAIL_MARKER" "$STATUSLINE_SCRIPT" 2>/dev/null || grep -qF 'cmail_info' "$STATUSLINE_SCRIPT" 2>/dev/null; then
+    echo "cmail statusline already present, skipping."
+  else
+    cat >> "$STATUSLINE_SCRIPT" <<'CMAIL_EOF'
 
 # cmail-statusline-start
 # cmail inbox count (added by cmail installer)
@@ -124,28 +178,25 @@ else
 fi
 # cmail-statusline-end
 CMAIL_EOF
-      echo "Added cmail count to statusline script."
-      echo "Note: You may need to manually add \${_cmail_info} to your status line output variable."
-    fi
-  else
-    echo "cmail statusline snippet already present, skipping."
+    echo "Added cmail count to statusline script."
+    echo "  Note: Add \${_cmail_info} to your status line output variable to display it."
   fi
-elif [[ -f "$CLAUDE_SETTINGS" ]]; then
-  echo "Note: No statusline script found. To see cmail count in your Claude Code status line,"
-  echo "  add this to your statusline script:"
-  echo '  cmail_count=$(ls -1 "$HOME/.cmail/inbox/"*.json 2>/dev/null | wc -l | tr -d '"'"' '"'"')'
 else
-  echo "Note: No Claude Code settings found. Status line integration skipped."
+  echo "No statusline script found — status line integration skipped."
+  echo "  To add manually, see: cmail setup"
 fi
 
-# Start the watcher now
+# --- Step 7: Start watcher ---
+
 "$SKILL_SRC/scripts/cmail.sh" watch --daemon &>/dev/null &
 echo "Started cmail watcher (PID: $!)."
+
+# --- Done ---
 
 echo ""
 echo "Installation complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Add hosts:  cmail setup"
-echo "  2. Test:       cmail hosts"
-echo "  3. Send:       cmail send <host> \"hello\""
+echo "  1. Run guided setup:  cmail setup"
+echo "  2. Test connectivity:  cmail hosts"
+echo "  3. Send a message:     cmail send <host> \"hello\""

@@ -283,12 +283,25 @@ ssh_pipe() {
 
 cmd_setup() {
   ensure_config
+
+  local CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+  local HOOKS_DIR
+  HOOKS_DIR="$(cd "$(dirname "$0")" && pwd)/hooks"
+  local STATUSLINE_SCRIPT="$HOME/.claude/statusline-command.sh"
+
+  echo "╔══════════════════════════════════════╗"
+  echo "║           cmail setup                ║"
+  echo "╚══════════════════════════════════════╝"
+  echo ""
+
+  # --- 1. Identity ---
+  echo "── Step 1/5: Identity ──"
+  echo ""
   local identity
   identity="$(json_get "$CONFIG_FILE" '.identity')"
-  echo "=== cmail setup ==="
-  echo ""
-  echo "Current identity: $identity"
-  read -r -p "New identity (Enter to keep current): " new_identity
+  echo "  Your identity is how other machines see you."
+  echo "  Current: $identity"
+  read -r -p "  New identity (Enter to keep): " new_identity </dev/tty 2>/dev/null || new_identity=""
   if [[ -n "$new_identity" ]]; then
     if command -v jq &>/dev/null; then
       jq --arg id "$new_identity" '.identity = $id' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
@@ -300,18 +313,56 @@ data['identity'] = '$new_identity'
 with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
 "
     fi
-    echo "Identity set to: $new_identity"
+    identity="$new_identity"
+    echo "  Set to: $identity"
+  else
+    echo "  Keeping: $identity"
+  fi
+  echo ""
+
+  # --- 2. Hosts ---
+  echo "── Step 2/5: Remote Hosts ──"
+  echo ""
+
+  # Show existing hosts
+  local existing_hosts=""
+  if command -v jq &>/dev/null; then
+    existing_hosts="$(jq -r '.hosts | keys[]' "$CONFIG_FILE" 2>/dev/null)" || true
+  else
+    existing_hosts="$(python3 -c "
+import json
+with open('$CONFIG_FILE') as f: data = json.load(f)
+for k in data.get('hosts', {}): print(k)
+" 2>/dev/null)" || true
   fi
 
+  if [[ -n "$existing_hosts" ]]; then
+    echo "  Existing hosts:"
+    while IFS= read -r h; do
+      local addr
+      addr="$(get_host_address "$h")"
+      local method
+      method="$(get_host_ssh_method "$h")"
+      echo "    $h -> $addr ($method)"
+    done <<< "$existing_hosts"
+    echo ""
+  fi
+
+  echo "  Add remote machines you want to message."
+  echo "  Leave name blank when done."
   echo ""
-  echo "Add a host (leave name blank to skip):"
   while true; do
-    read -r -p "  Host name: " host_name
+    read -r -p "  Host name: " host_name </dev/tty 2>/dev/null || host_name=""
     [[ -z "$host_name" ]] && break
-    read -r -p "  Address (hostname or IP): " host_addr
+    read -r -p "  Address (Tailscale hostname or IP): " host_addr </dev/tty 2>/dev/null || host_addr=""
     [[ -z "$host_addr" ]] && { echo "  Address required, skipping."; continue; }
-    read -r -p "  SSH method [tailscale/standard] (default: tailscale): " host_method
-    host_method="${host_method:-tailscale}"
+
+    echo "  SSH method:"
+    echo "    1) tailscale — uses 'tailscale ssh' (no keys needed)"
+    echo "    2) standard  — uses regular 'ssh' (needs keys/password)"
+    read -r -p "  Choose [1/2] (default: 1): " method_choice </dev/tty 2>/dev/null || method_choice=""
+    local host_method="tailscale"
+    [[ "$method_choice" == "2" ]] && host_method="standard"
 
     if command -v jq &>/dev/null; then
       jq --arg name "$host_name" --arg addr "$host_addr" --arg method "$host_method" \
@@ -324,18 +375,187 @@ data.setdefault('hosts', {})['$host_name'] = {'address': '$host_addr', 'ssh_meth
 with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
 "
     fi
-    echo "  Added host: $host_name -> $host_addr ($host_method)"
-    echo ""
+    echo "  Added: $host_name -> $host_addr ($host_method)"
 
-    echo "  Testing connectivity..."
+    echo "  Testing connection..."
     if ssh_exec "$host_addr" "$host_method" "echo ok" &>/dev/null; then
-      echo "  Connection successful!"
+      echo "  Connected!"
     else
-      echo "  Connection failed. Check address and SSH configuration."
+      echo "  Could not connect. Check address and SSH config."
     fi
     echo ""
   done
-  echo "Setup complete."
+
+  # --- 3. Hooks ---
+  echo "── Step 3/5: Claude Code Hooks ──"
+  echo ""
+  echo "  Hooks let Claude auto-detect new messages."
+  echo "    - SessionStart:     check inbox when a session opens"
+  echo "    - UserPromptSubmit: check before each response"
+  echo "    - Stop:             check after each response, continue if new mail"
+  echo ""
+
+  local hooks_installed=false
+  if [[ -f "$CLAUDE_SETTINGS" ]] && command -v jq &>/dev/null; then
+    if jq -r '.hooks | .. | .command? // empty' "$CLAUDE_SETTINGS" 2>/dev/null | grep -q "cmail"; then
+      echo "  Hooks are already installed."
+      hooks_installed=true
+    fi
+  fi
+
+  if [[ "$hooks_installed" == false ]]; then
+    if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
+      echo "  No Claude Code settings found ($CLAUDE_SETTINGS)."
+      echo "  Skipping — you can add hooks manually later."
+    elif ! command -v jq &>/dev/null; then
+      echo "  jq not found — needed to edit settings. Install jq and re-run setup."
+    else
+      read -r -p "  Install hooks now? [Y/n] " hook_confirm </dev/tty 2>/dev/null || hook_confirm="y"
+      if [[ ! "$hook_confirm" =~ ^[Nn] ]]; then
+        local session_start="$HOOKS_DIR/session-start.sh"
+        local user_prompt="$HOOKS_DIR/user-prompt-submit.sh"
+        local stop_hook="$HOOKS_DIR/stop.sh"
+        local tmp="$CLAUDE_SETTINGS.tmp"
+
+        jq --arg ss "$session_start" --arg up "$user_prompt" --arg st "$stop_hook" '
+          .hooks //= {} |
+          .hooks.SessionStart = (.hooks.SessionStart // []) + [{
+            "hooks": [{"type": "command", "command": $ss, "timeout": 10}]
+          }] |
+          .hooks.UserPromptSubmit = (.hooks.UserPromptSubmit // []) + [{
+            "hooks": [{"type": "command", "command": $up, "timeout": 5}]
+          }] |
+          .hooks.Stop = (.hooks.Stop // []) + [{
+            "hooks": [{"type": "command", "command": $st, "timeout": 10}]
+          }]
+        ' "$CLAUDE_SETTINGS" > "$tmp" && mv "$tmp" "$CLAUDE_SETTINGS"
+
+        echo "  Hooks installed!"
+      else
+        echo "  Skipped. Run 'cmail setup' again to install later."
+      fi
+    fi
+  fi
+  echo ""
+
+  # --- 4. Status line ---
+  echo "── Step 4/5: Status Line ──"
+  echo ""
+  echo "  Show inbox count in Claude Code's status line: (3) cmail"
+  echo ""
+
+  local statusline_done=false
+  if [[ -f "$STATUSLINE_SCRIPT" ]]; then
+    if grep -qF "cmail" "$STATUSLINE_SCRIPT" 2>/dev/null; then
+      echo "  cmail is already in your status line."
+      statusline_done=true
+    fi
+  fi
+
+  if [[ "$statusline_done" == false ]]; then
+    if [[ -f "$STATUSLINE_SCRIPT" ]]; then
+      read -r -p "  Add cmail count to your existing status line? [Y/n] " sl_confirm </dev/tty 2>/dev/null || sl_confirm="y"
+      if [[ ! "$sl_confirm" =~ ^[Nn] ]]; then
+        cat >> "$STATUSLINE_SCRIPT" <<'CMAIL_EOF'
+
+# cmail-statusline-start
+_cmail_count=$(ls -1 "$HOME/.cmail/inbox/"*.json 2>/dev/null | wc -l | tr -d ' ')
+if (( _cmail_count > 0 )); then
+    _cmail_info=" \033[38;2;128;128;128m|\033[0m \033[1m(${_cmail_count})\033[22m cmail"
+else
+    _cmail_info=" \033[38;2;128;128;128m|\033[0m \033[38;2;128;128;128m(0) cmail\033[0m"
+fi
+# cmail-statusline-end
+CMAIL_EOF
+        echo "  Added! You may need to add \${_cmail_info} to your output line."
+      else
+        echo "  Skipped."
+      fi
+    else
+      echo "  No statusline script found at $STATUSLINE_SCRIPT."
+      echo "  See README for manual setup instructions."
+    fi
+  fi
+  echo ""
+
+  # --- 5. Watcher ---
+  echo "── Step 5/5: Inbox Watcher ──"
+  echo ""
+
+  local watcher_running=false
+  local pidfile="$COMMS_DIR/.watch.pid"
+  if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    echo "  Watcher is running (PID: $(cat "$pidfile"))."
+    watcher_running=true
+  else
+    echo "  Watcher is not running."
+    read -r -p "  Start it now? [Y/n] " watch_confirm </dev/tty 2>/dev/null || watch_confirm="y"
+    if [[ ! "$watch_confirm" =~ ^[Nn] ]]; then
+      cmd_watch --daemon &
+      sleep 1
+      echo "  Watcher started."
+      watcher_running=true
+    fi
+  fi
+
+  # Check shell profile
+  local SHELL_RC=""
+  if [[ -f "$HOME/.zshrc" ]]; then
+    SHELL_RC="$HOME/.zshrc"
+  elif [[ -f "$HOME/.bashrc" ]]; then
+    SHELL_RC="$HOME/.bashrc"
+  fi
+
+  if [[ -n "$SHELL_RC" ]]; then
+    if grep -qF "cmail watch --daemon" "$SHELL_RC" 2>/dev/null; then
+      echo "  Auto-start is configured in $SHELL_RC."
+    else
+      read -r -p "  Add auto-start to $SHELL_RC? [Y/n] " auto_confirm </dev/tty 2>/dev/null || auto_confirm="y"
+      if [[ ! "$auto_confirm" =~ ^[Nn] ]]; then
+        echo "" >> "$SHELL_RC"
+        echo "# cmail: auto-start inbox watcher" >> "$SHELL_RC"
+        echo 'command -v cmail &>/dev/null && cmail watch --daemon &>/dev/null &' >> "$SHELL_RC"
+        echo "  Added to $SHELL_RC."
+      fi
+    fi
+  fi
+  echo ""
+
+  # --- Summary ---
+  echo "╔══════════════════════════════════════╗"
+  echo "║          Setup complete!             ║"
+  echo "╚══════════════════════════════════════╝"
+  echo ""
+  echo "  Identity:    $identity"
+
+  # Count hosts
+  local host_count=0
+  if command -v jq &>/dev/null; then
+    host_count=$(jq '.hosts | length' "$CONFIG_FILE" 2>/dev/null || echo 0)
+  fi
+  echo "  Hosts:       $host_count configured"
+
+  if [[ "$hooks_installed" == true ]] || [[ -f "$CLAUDE_SETTINGS" ]] && command -v jq &>/dev/null && jq -r '.hooks | .. | .command? // empty' "$CLAUDE_SETTINGS" 2>/dev/null | grep -q "cmail"; then
+    echo "  Hooks:       installed"
+  else
+    echo "  Hooks:       not installed"
+  fi
+
+  if [[ -f "$STATUSLINE_SCRIPT" ]] && grep -qF "cmail" "$STATUSLINE_SCRIPT" 2>/dev/null; then
+    echo "  Status line: configured"
+  else
+    echo "  Status line: not configured"
+  fi
+
+  if [[ "$watcher_running" == true ]]; then
+    echo "  Watcher:     running"
+  else
+    echo "  Watcher:     not running"
+  fi
+
+  echo ""
+  echo "  Try: cmail send <host> \"hello from $identity\""
+  echo ""
 }
 
 cmd_send() {
