@@ -38,27 +38,53 @@ echo "Made scripts executable."
 
 # --- Step 2: Install cmail to PATH ---
 
+CMAIL_SCRIPT="$SKILL_SRC/scripts/cmail.sh"
+CMAIL_BIN=""
+
+install_to_path() {
+  local target="$1"
+  local use_sudo="${2:-false}"
+
+  if [[ "$use_sudo" == true ]]; then
+    sudo rm -f "$target" 2>/dev/null && \
+    sudo ln -s "$CMAIL_SCRIPT" "$target" 2>/dev/null || return 1
+  else
+    rm -f "$target"
+    ln -s "$CMAIL_SCRIPT" "$target" || return 1
+  fi
+
+  # Verify the symlink actually resolves
+  if [[ -x "$target" ]] && "$target" help &>/dev/null; then
+    CMAIL_BIN="$target"
+    return 0
+  else
+    echo "  Warning: symlink created but doesn't resolve correctly. Removing."
+    rm -f "$target" 2>/dev/null || sudo rm -f "$target" 2>/dev/null
+    return 1
+  fi
+}
+
 BIN_DIR="/usr/local/bin"
-LINK_OK=false
 if [[ -w "$BIN_DIR" ]]; then
-  rm -f "$BIN_DIR/cmail"
-  ln -s "$SKILL_SRC/scripts/cmail.sh" "$BIN_DIR/cmail" && LINK_OK=true
+  install_to_path "$BIN_DIR/cmail" false
 elif command -v sudo &>/dev/null; then
-  sudo rm -f "$BIN_DIR/cmail" 2>/dev/null && \
-  sudo ln -s "$SKILL_SRC/scripts/cmail.sh" "$BIN_DIR/cmail" 2>/dev/null && LINK_OK=true
+  install_to_path "$BIN_DIR/cmail" true
 fi
 
-if [[ "$LINK_OK" == true ]]; then
-  echo "Linked: $BIN_DIR/cmail -> cmail.sh (available globally)"
-else
+if [[ -z "$CMAIL_BIN" ]]; then
   echo "Note: Could not install to $BIN_DIR. Trying ~/.local/bin instead."
   mkdir -p "$HOME/.local/bin"
-  rm -f "$HOME/.local/bin/cmail"
-  ln -s "$SKILL_SRC/scripts/cmail.sh" "$HOME/.local/bin/cmail"
-  echo "Linked: ~/.local/bin/cmail -> cmail.sh"
-  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+  install_to_path "$HOME/.local/bin/cmail" false
+  if [[ -n "$CMAIL_BIN" ]] && [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
     echo "  Add to PATH: export PATH=\"\$HOME/.local/bin:\$PATH\""
   fi
+fi
+
+if [[ -n "$CMAIL_BIN" ]]; then
+  echo "Installed: $CMAIL_BIN (verified working)"
+else
+  echo "Warning: Could not install cmail to PATH. Use the full path:"
+  echo "  $CMAIL_SCRIPT"
 fi
 
 # --- Step 3: Initialize ~/.cmail/ structure ---
@@ -122,8 +148,15 @@ install_permissions_and_hooks() {
   local changed=false
 
   # --- Permissions ---
+  # Include both short command and resolved full paths so permissions work
+  # regardless of whether cmail is on PATH or invoked directly
+  local resolved_script
+  resolved_script="$(readlink -f "$CMAIL_SCRIPT" 2>/dev/null || echo "$CMAIL_SCRIPT")"
+
   local cmail_perms=(
     'Bash(cmail *)'
+    "Bash($CMAIL_SCRIPT *)"
+    "Bash($resolved_script *)"
     'Bash(~/.claude/skills/cmail/scripts/cmail.sh *)'
     'Bash(rm -f ~/.cmail/inbox/*.json *)'
     'Bash(rm -f ~/.cmail/.has_unread)'
@@ -132,6 +165,17 @@ install_permissions_and_hooks() {
     'Bash(tailscale ssh *)'
     'Bash(claude --print *)'
   )
+
+  # Deduplicate (resolved path may equal CMAIL_SCRIPT)
+  local unique_perms=()
+  local seen=""
+  for perm in "${cmail_perms[@]}"; do
+    if [[ "$seen" != *"|$perm|"* ]]; then
+      unique_perms+=("$perm")
+      seen+="|$perm|"
+    fi
+  done
+  cmail_perms=("${unique_perms[@]}")
 
   # Check which permissions are missing
   local existing_perms
