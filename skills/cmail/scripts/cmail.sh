@@ -1178,14 +1178,60 @@ notify_new_message() {
   fi
 }
 
+cmd_watch_stop() {
+  local pidfile="$COMMS_DIR/.watch.pid"
+  if [[ -f "$pidfile" ]]; then
+    local pid
+    pid="$(cat "$pidfile")"
+    if kill -0 "$pid" 2>/dev/null; then
+      # Kill the watcher and its fswatch child
+      kill "$pid" 2>/dev/null
+      # Also kill any fswatch watching our inbox
+      pgrep -f "fswatch.*\\.cmail/inbox" 2>/dev/null | xargs kill 2>/dev/null || true
+      rm -f "$pidfile"
+      sleep 0.3
+      echo "Watcher stopped (was PID: $pid)."
+      return 0
+    fi
+    rm -f "$pidfile"
+  fi
+  echo "Watcher is not running."
+  return 0
+}
+
 cmd_watch() {
   local daemon=false
+  local subcmd=""
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --daemon) daemon=true; shift ;;
+      stop)    subcmd="stop"; shift ;;
+      restart) subcmd="restart"; shift ;;
+      -h|--help|help) show_watch_help; return 0 ;;
       *) shift ;;
     esac
   done
+
+  if [[ "$subcmd" == "stop" ]]; then
+    cmd_watch_stop
+    return 0
+  fi
+
+  if [[ "$subcmd" == "restart" ]]; then
+    cmd_watch_stop
+    echo "Starting fresh watcher..."
+    # Re-exec ourselves with --daemon
+    cmd_watch --daemon &
+    sleep 0.5
+    local pidfile="$COMMS_DIR/.watch.pid"
+    if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+      echo "Watcher restarted (PID: $(cat "$pidfile"))."
+    else
+      echo "Warning: watcher may not have started correctly."
+    fi
+    return 0
+  fi
 
   ensure_dirs
 
@@ -1326,6 +1372,29 @@ cmd_agent() {
   esac
 }
 
+cmd_update() {
+  # Find the repo directory (SCRIPT_DIR is inside skills/cmail/scripts/)
+  local repo_dir="$SCRIPT_DIR/../../.."
+  if [[ ! -d "$repo_dir/.git" ]]; then
+    # Try following the skill symlink
+    repo_dir="$(readlink -f "$SCRIPT_DIR/../../.." 2>/dev/null || echo "")"
+    if [[ -z "$repo_dir" || ! -d "$repo_dir/.git" ]]; then
+      echo "Could not find cmail git repo. Update manually." >&2
+      return 1
+    fi
+  fi
+
+  echo "Pulling latest code..."
+  if (cd "$repo_dir" && git pull); then
+    echo ""
+    echo "Restarting watcher..."
+    cmd_watch restart
+  else
+    echo "git pull failed." >&2
+    return 1
+  fi
+}
+
 # --- Help text ---
 
 show_usage() {
@@ -1342,6 +1411,7 @@ show_usage() {
   echo "  setup     Interactive setup wizard"
   echo "  watch     Background watcher for incoming messages"
   echo "  agent     Auto-respond agent (uses claude --print)"
+  echo "  update    Pull latest code and restart services"
   echo "  deps      Check and install dependencies"
   echo ""
   echo "Run 'cmail <command> --help' for details on a specific command."
@@ -1448,14 +1518,24 @@ show_hosts_help() {
 show_watch_help() {
   echo "Background watcher for incoming messages"
   echo ""
-  echo "USAGE: cmail watch [options]"
+  echo "USAGE: cmail watch [subcommand] [options]"
   echo ""
   echo "Watches ~/.cmail/inbox/ for new messages and sends desktop"
   echo "notifications. Triggers the auto-respond agent if enabled."
   echo ""
+  echo "SUBCOMMANDS:"
+  echo "  stop       Stop the running watcher"
+  echo "  restart    Stop and restart the watcher (picks up code changes)"
+  echo ""
   echo "OPTIONS:"
   echo "  --daemon     Run silently, exit if already running"
   echo "  -h, --help   Show this help"
+  echo ""
+  echo "EXAMPLES:"
+  echo "  cmail watch              Start watcher interactively"
+  echo "  cmail watch --daemon     Start in background (idempotent)"
+  echo "  cmail watch restart      Restart after code updates"
+  echo "  cmail watch stop         Stop the watcher"
 }
 
 show_agent_help() {
@@ -1478,6 +1558,18 @@ show_agent_help() {
   echo "  CMAIL_AGENT_MODEL     Model to use (default: claude-sonnet-4-5-20250929)"
   echo "  CMAIL_AGENT_TIMEOUT   Timeout in seconds (default: 120)"
   echo "  CMAIL_CLAUDE_PATH     Path to claude binary"
+}
+
+show_update_help() {
+  echo "Pull latest code and restart services"
+  echo ""
+  echo "USAGE: cmail update"
+  echo ""
+  echo "Runs 'git pull' in the cmail repo directory, then restarts"
+  echo "the watcher so it picks up any code changes."
+  echo ""
+  echo "OPTIONS:"
+  echo "  -h, --help   Show this help"
 }
 
 show_deps_help() {
@@ -1554,6 +1646,9 @@ case "$cmd" in
   agent)
     if is_help_flag "${1:-}" || [[ $# -eq 0 ]]; then show_agent_help; exit 0; fi
     cmd_agent "$@" ;;
+  update)
+    if is_help_flag "${1:-}"; then show_update_help; exit 0; fi
+    cmd_update "$@" ;;
   deps)
     if is_help_flag "${1:-}"; then show_deps_help; exit 0; fi
     cmd_deps "$@" ;;
