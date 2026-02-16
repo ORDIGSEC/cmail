@@ -857,14 +857,18 @@ cmd_watch() {
 
   ensure_dirs
 
-  # In daemon mode, silently exit if already running
+  # Prevent duplicate watchers — always check PID file
   local pidfile="$COMMS_DIR/.watch.pid"
-  if [[ "$daemon" == true ]]; then
-    if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+  if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    if [[ "$daemon" == true ]]; then
       return 0
+    else
+      echo "Watcher already running (PID: $(cat "$pidfile")). Stop it first or use --daemon."
+      return 1
     fi
-    echo $$ > "$pidfile"
   fi
+  echo $$ > "$pidfile"
+  trap 'rm -f "$pidfile"' EXIT
 
   if [[ "$daemon" != true ]]; then
     echo "Watching for new messages in $INBOX_DIR ..."
