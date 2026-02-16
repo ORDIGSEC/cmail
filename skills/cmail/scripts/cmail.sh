@@ -952,8 +952,7 @@ cmd_agent() {
       ;;
     run)
       # Manually trigger the agent now
-      local agent_script
-      agent_script="$(cd "$(dirname "$0")" && pwd)/cmail-agent.sh"
+      local agent_script="$SCRIPT_DIR/cmail-agent.sh"
       if [[ -x "$agent_script" ]]; then
         echo "Running cmail-agent..."
         "$agent_script"
