@@ -2,10 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_SRC="$SCRIPT_DIR/skills/claudecomms"
-SKILL_DST="$HOME/.claude/skills/claudecomms"
+SKILL_SRC="$SCRIPT_DIR/skills/cmail"
+SKILL_DST="$HOME/.claude/skills/cmail"
 
-echo "=== claudeComms Installer ==="
+echo "=== cmail Installer ==="
 echo ""
 
 # Symlink skill into ~/.claude/skills/
@@ -29,17 +29,41 @@ ln -s "$SKILL_SRC" "$SKILL_DST"
 echo "Linked: $SKILL_DST -> $SKILL_SRC"
 
 # Make script executable
-chmod +x "$SKILL_SRC/scripts/claudecomms.sh"
-echo "Made claudecomms.sh executable."
+chmod +x "$SKILL_SRC/scripts/cmail.sh"
+echo "Made cmail.sh executable."
 
-# Initialize ~/.claudecomms/ structure
-mkdir -p "$HOME/.claudecomms/inbox" "$HOME/.claudecomms/outbox"
-echo "Created ~/.claudecomms/ directories."
+# Install cmail to PATH so it's available globally (even in sandboxed Claude sessions)
+BIN_DIR="/usr/local/bin"
+LINK_OK=false
+if [[ -w "$BIN_DIR" ]]; then
+  rm -f "$BIN_DIR/cmail"
+  ln -s "$SKILL_SRC/scripts/cmail.sh" "$BIN_DIR/cmail" && LINK_OK=true
+elif command -v sudo &>/dev/null; then
+  sudo rm -f "$BIN_DIR/cmail" 2>/dev/null && \
+  sudo ln -s "$SKILL_SRC/scripts/cmail.sh" "$BIN_DIR/cmail" 2>/dev/null && LINK_OK=true
+fi
+
+if [[ "$LINK_OK" == true ]]; then
+  echo "Linked: $BIN_DIR/cmail -> cmail.sh (available globally)"
+else
+  echo "Note: Could not install to $BIN_DIR. Trying ~/.local/bin instead."
+  mkdir -p "$HOME/.local/bin"
+  rm -f "$HOME/.local/bin/cmail"
+  ln -s "$SKILL_SRC/scripts/cmail.sh" "$HOME/.local/bin/cmail"
+  echo "Linked: ~/.local/bin/cmail -> cmail.sh"
+  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    echo "  Add to PATH: export PATH=\"\$HOME/.local/bin:\$PATH\""
+  fi
+fi
+
+# Initialize ~/.cmail/ structure
+mkdir -p "$HOME/.cmail/inbox" "$HOME/.cmail/outbox"
+echo "Created ~/.cmail/ directories."
 
 # Create default config if it doesn't exist
-if [[ ! -f "$HOME/.claudecomms/config.json" ]]; then
+if [[ ! -f "$HOME/.cmail/config.json" ]]; then
   IDENTITY="$(hostname | tr '[:upper:]' '[:lower:]' | sed 's/\.local$//')"
-  cat > "$HOME/.claudecomms/config.json" <<EOF
+  cat > "$HOME/.cmail/config.json" <<EOF
 {
   "identity": "$IDENTITY",
   "hosts": {}
@@ -54,6 +78,6 @@ echo ""
 echo "Installation complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Add hosts:  ~/.claude/skills/claudecomms/scripts/claudecomms.sh setup"
-echo "  2. Test:       ~/.claude/skills/claudecomms/scripts/claudecomms.sh hosts"
-echo "  3. Send:       ~/.claude/skills/claudecomms/scripts/claudecomms.sh send <host> \"hello\""
+echo "  1. Add hosts:  cmail setup"
+echo "  2. Test:       cmail hosts"
+echo "  3. Send:       cmail send <host> \"hello\""

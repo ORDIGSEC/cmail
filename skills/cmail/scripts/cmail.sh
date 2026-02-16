@@ -1,11 +1,137 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-COMMS_DIR="$HOME/.claudecomms"
+COMMS_DIR="$HOME/.cmail"
 INBOX_DIR="$COMMS_DIR/inbox"
 OUTBOX_DIR="$COMMS_DIR/outbox"
 CONFIG_FILE="$COMMS_DIR/config.json"
 UNREAD_MARKER="$COMMS_DIR/.has_unread"
+
+DEPS_CHECKED_MARKER="$COMMS_DIR/.deps_checked"
+
+# --- Dependency Management ---
+
+detect_pkg_manager() {
+  if command -v brew &>/dev/null; then echo "brew"
+  elif command -v apt-get &>/dev/null; then echo "apt"
+  elif command -v dnf &>/dev/null; then echo "dnf"
+  elif command -v yum &>/dev/null; then echo "yum"
+  elif command -v pacman &>/dev/null; then echo "pacman"
+  elif command -v apk &>/dev/null; then echo "apk"
+  else echo "unknown"
+  fi
+}
+
+install_pkg() {
+  local pkg="$1"
+  local mgr
+  mgr="$(detect_pkg_manager)"
+  case "$mgr" in
+    brew)   brew install "$pkg" ;;
+    apt)    sudo apt-get install -y "$pkg" ;;
+    dnf)    sudo dnf install -y "$pkg" ;;
+    yum)    sudo yum install -y "$pkg" ;;
+    pacman) sudo pacman -S --noconfirm "$pkg" ;;
+    apk)    sudo apk add "$pkg" ;;
+    *)      return 1 ;;
+  esac
+}
+
+# Maps logical dep names to package names per manager
+pkg_name() {
+  local dep="$1" mgr="$2"
+  case "$dep" in
+    jq) echo "jq" ;;
+    fswatch) echo "fswatch" ;;
+    inotifywait)
+      case "$mgr" in
+        apt|dnf|yum) echo "inotify-tools" ;;
+        pacman) echo "inotify-tools" ;;
+        apk) echo "inotify-tools" ;;
+        *) echo "inotify-tools" ;;
+      esac
+      ;;
+  esac
+}
+
+check_deps() {
+  # Skip if already checked this install
+  [[ -f "$DEPS_CHECKED_MARKER" ]] && return 0
+
+  mkdir -p "$COMMS_DIR"
+  local missing=()
+
+  # jq is strongly recommended
+  if ! command -v jq &>/dev/null; then
+    missing+=("jq")
+  fi
+
+  # File watcher (platform-dependent)
+  if [[ "$(uname)" == "Darwin" ]]; then
+    if ! command -v fswatch &>/dev/null; then
+      missing+=("fswatch")
+    fi
+  else
+    if ! command -v inotifywait &>/dev/null; then
+      missing+=("inotifywait")
+    fi
+  fi
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    touch "$DEPS_CHECKED_MARKER"
+    return 0
+  fi
+
+  local mgr
+  mgr="$(detect_pkg_manager)"
+
+  echo "cmail: missing optional dependencies: ${missing[*]}"
+
+  if [[ "$mgr" == "unknown" ]]; then
+    echo "Could not detect package manager. Please install manually: ${missing[*]}"
+    # Don't block — deps are optional
+    touch "$DEPS_CHECKED_MARKER"
+    return 0
+  fi
+
+  echo "Install them now? (Uses $mgr) [Y/n] "
+  read -r confirm </dev/tty 2>/dev/null || confirm="y"
+  if [[ "$confirm" =~ ^[Nn] ]]; then
+    echo "Skipping. cmail will use fallbacks where available."
+    touch "$DEPS_CHECKED_MARKER"
+    return 0
+  fi
+
+  for dep in "${missing[@]}"; do
+    local actual_pkg
+    actual_pkg="$(pkg_name "$dep" "$mgr")"
+    echo "Installing $actual_pkg..."
+    if install_pkg "$actual_pkg"; then
+      echo "  Installed $actual_pkg"
+    else
+      echo "  Failed to install $actual_pkg — continuing without it"
+    fi
+  done
+
+  touch "$DEPS_CHECKED_MARKER"
+}
+
+cmd_deps() {
+  # Force re-check by removing marker
+  rm -f "$DEPS_CHECKED_MARKER"
+  check_deps
+  echo ""
+  echo "Dependency status:"
+  printf "  %-15s %s\n" "jq" "$(command -v jq &>/dev/null && echo "installed" || echo "missing (using python3 fallback)")"
+  printf "  %-15s %s\n" "python3" "$(command -v python3 &>/dev/null && echo "installed" || echo "missing")"
+  if [[ "$(uname)" == "Darwin" ]]; then
+    printf "  %-15s %s\n" "fswatch" "$(command -v fswatch &>/dev/null && echo "installed" || echo "missing (needed for watch command)")"
+  else
+    printf "  %-15s %s\n" "inotifywait" "$(command -v inotifywait &>/dev/null && echo "installed" || echo "missing (needed for watch command)")"
+  fi
+  printf "  %-15s %s\n" "ssh" "$(command -v ssh &>/dev/null && echo "installed" || echo "missing")"
+  printf "  %-15s %s\n" "tailscale" "$(command -v tailscale &>/dev/null && echo "installed" || echo "not found")"
+}
 
 # --- Helpers ---
 
@@ -25,7 +151,7 @@ ensure_config() {
 }
 EOF
     echo "Created config with identity: $identity"
-    echo "Run 'claudecomms setup' to add hosts."
+    echo "Run 'cmail setup' to add hosts."
   fi
 }
 
@@ -108,6 +234,28 @@ print(method)
   fi
 }
 
+auto_update_ssh_method() {
+  local addr="$1"
+  # Update config so future calls skip the failed tailscale attempt
+  # Looks up hosts by address since callers pass the address, not the name
+  if command -v jq &>/dev/null; then
+    jq --arg addr "$addr" \
+      '(.hosts | to_entries[] | select(.value.address == $addr) | .key) as $name |
+       if $name then .hosts[$name].ssh_method = "standard" else . end' \
+      "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+  else
+    python3 -c "
+import json
+with open('$CONFIG_FILE', 'r') as f: data = json.load(f)
+for name, info in data.get('hosts', {}).items():
+    if info.get('address') == '$addr':
+        info['ssh_method'] = 'standard'
+        break
+with open('$CONFIG_FILE', 'w') as f: json.dump(data, f, indent=2)
+" 2>/dev/null
+  fi
+}
+
 ssh_exec() {
   local address="$1" method="$2"
   shift 2
@@ -115,7 +263,7 @@ ssh_exec() {
     if tailscale ssh "$address" "$@" 2>/dev/null; then
       return 0
     fi
-    echo "(tailscale ssh failed, falling back to standard ssh)" >&2
+    auto_update_ssh_method "$address"
   fi
   ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$address" "$@"
 }
@@ -126,7 +274,7 @@ ssh_pipe() {
     if tailscale ssh "$address" "$remote_cmd" 2>/dev/null; then
       return 0
     fi
-    echo "(tailscale ssh failed, falling back to standard ssh)" >&2
+    auto_update_ssh_method "$address"
   fi
   ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$address" "$remote_cmd"
 }
@@ -137,7 +285,7 @@ cmd_setup() {
   ensure_config
   local identity
   identity="$(json_get "$CONFIG_FILE" '.identity')"
-  echo "=== claudecomms setup ==="
+  echo "=== cmail setup ==="
   echo ""
   echo "Current identity: $identity"
   read -r -p "New identity (Enter to keep current): " new_identity
@@ -211,7 +359,7 @@ cmd_send() {
   done
 
   if [[ -z "$host" || -z "$message" ]]; then
-    echo "Usage: claudecomms send <host> [--subject <subject>] <message>" >&2
+    echo "Usage: cmail send <host> [--subject <subject>] <message>" >&2
     exit 1
   fi
 
@@ -267,7 +415,7 @@ print(json.dumps(msg, indent=2))
 ")"
   fi
 
-  echo "$json_msg" | ssh_pipe "$address" "$method" "mkdir -p ~/.claudecomms/inbox && cat > ~/.claudecomms/inbox/$filename && touch ~/.claudecomms/.has_unread"
+  echo "$json_msg" | ssh_pipe "$address" "$method" "mkdir -p ~/.cmail/inbox && cat > ~/.cmail/inbox/$filename && touch ~/.cmail/.has_unread"
 
   # Save to local outbox
   echo "$json_msg" > "$OUTBOX_DIR/$filename"
@@ -321,7 +469,7 @@ cmd_read() {
   local target_id="$1"
 
   if [[ -z "$target_id" ]]; then
-    echo "Usage: claudecomms read <message-id>" >&2
+    echo "Usage: cmail read <message-id>" >&2
     exit 1
   fi
 
@@ -384,7 +532,7 @@ cmd_reply() {
   done
 
   if [[ -z "$target_id" || -z "$message" ]]; then
-    echo "Usage: claudecomms reply <message-id> [--subject <subject>] <message>" >&2
+    echo "Usage: cmail reply <message-id> [--subject <subject>] <message>" >&2
     exit 1
   fi
 
@@ -433,7 +581,7 @@ for name, info in data.get('hosts', {}).items():
   fi
 
   if [[ -z "$hosts_json" ]]; then
-    echo "No hosts configured. Run 'claudecomms setup' to add hosts."
+    echo "No hosts configured. Run 'cmail setup' to add hosts."
     return 0
   fi
 
@@ -471,7 +619,7 @@ cmd_watch() {
       # Desktop notification (macOS)
       local from=""
       [[ -f "$event" ]] && from="$(json_get "$event" '.from' 2>/dev/null)" || true
-      osascript -e "display notification \"New message from ${from:-unknown}\" with title \"claudecomms\"" 2>/dev/null || true
+      osascript -e "display notification \"New message from ${from:-unknown}\" with title \"cmail\"" 2>/dev/null || true
       echo "New message received: $(basename "$event")"
     done
   else
@@ -481,7 +629,7 @@ cmd_watch() {
       # Desktop notification (Linux)
       local from=""
       [[ -f "$event" ]] && from="$(json_get "$event" '.from' 2>/dev/null)" || true
-      notify-send "claudecomms" "New message from ${from:-unknown}" 2>/dev/null || true
+      notify-send "cmail" "New message from ${from:-unknown}" 2>/dev/null || true
       echo "New message received: $(basename "$event")"
     done
   fi
@@ -492,6 +640,11 @@ cmd_watch() {
 cmd="${1:-help}"
 shift || true
 
+# Auto-check deps on first run (skip for help/deps to avoid chicken-and-egg)
+if [[ "$cmd" != "help" && "$cmd" != "--help" && "$cmd" != "-h" && "$cmd" != "deps" ]]; then
+  check_deps
+fi
+
 case "$cmd" in
   setup)   cmd_setup "$@" ;;
   send)    cmd_send "$@" ;;
@@ -500,8 +653,9 @@ case "$cmd" in
   reply)   cmd_reply "$@" ;;
   hosts)   cmd_hosts "$@" ;;
   watch)   cmd_watch "$@" ;;
+  deps)    cmd_deps "$@" ;;
   help|--help|-h)
-    echo "claudecomms — File-based messaging over Tailscale SSH"
+    echo "cmail — File-based messaging over Tailscale SSH"
     echo ""
     echo "Commands:"
     echo "  setup                          Configure identity and hosts"
@@ -511,11 +665,12 @@ case "$cmd" in
     echo "  reply <id> [--subject s] msg   Reply to a message"
     echo "  hosts                          List hosts + test connectivity"
     echo "  watch                          Watch for new messages"
+    echo "  deps                           Check and install dependencies"
     echo "  help                           Show this help"
     ;;
   *)
     echo "Unknown command: $cmd" >&2
-    echo "Run 'claudecomms help' for usage." >&2
+    echo "Run 'cmail help' for usage." >&2
     exit 1
     ;;
 esac
