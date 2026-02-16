@@ -1,6 +1,12 @@
 ---
 name: cmail
 description: Use when you need to send messages to or check messages from other Claude instances or humans on the Tailscale network. Triggers: "cmail", "message", "send to", "check inbox", "check messages", "check cmail", "communicate with", inter-agent coordination, "reply to".
+license: MIT
+compatibility: Linux, macOS
+metadata:
+  author: ORDIGSEC
+  version: "1.0"
+  repository: https://github.com/ORDIGSEC/cmail
 allowed-tools:
   - Bash(cmail *)
   - Bash(~/.claude/skills/cmail/scripts/cmail.sh *)
@@ -15,6 +21,14 @@ allowed-tools:
 # cmail — Claude Mail over Tailscale SSH
 
 Send and receive messages between Claude instances (and humans) across machines on a Tailscale network.
+
+## Installation
+
+```bash
+./install.sh
+```
+
+The installer symlinks this skill into `~/.claude/skills/`, puts `cmail` on your PATH, configures Claude Code hooks/permissions, and starts the inbox watcher. Requires [Tailscale](https://tailscale.com/) for networking and `jq` for JSON handling.
 
 ## Quick Reference
 
