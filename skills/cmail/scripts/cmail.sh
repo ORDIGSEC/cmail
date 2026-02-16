@@ -833,16 +833,22 @@ cmd_inbox() {
     return 0
   fi
 
-  # Parse remaining flags
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --if-new) if_new=true; shift ;;
-      *) shift ;;
-    esac
-  done
-
   case "$subcmd" in
     show)
+      # Parse show subcommand and flags
+      local show_subcmd=""
+      local detail_count=1
+
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          detail)  show_subcmd="detail"; shift ;;
+          --if-new) if_new=true; shift ;;
+          -h|--help|help) show_show_help; return 0 ;;
+          -[0-9]*) detail_count="${1#-}"; show_subcmd="detail"; shift ;;
+          *) shift ;;
+        esac
+      done
+
       if [[ "$if_new" == true ]]; then
         if [[ ! -f "$UNREAD_MARKER" ]]; then
           echo "No new messages."
@@ -858,19 +864,57 @@ cmd_inbox() {
         return 0
       fi
 
-      echo "=== Inbox ==="
-      echo ""
-      while IFS= read -r file; do
-        local id from subject timestamp
-        id="$(json_get "$file" '.id')"
-        from="$(json_get "$file" '.from')"
-        subject="$(json_get "$file" '.subject')"
-        timestamp="$(json_get "$file" '.timestamp')"
-        local short_id="${id:0:8}"
-        local display_subject=""
-        [[ -n "$subject" && "$subject" != "null" && "$subject" != "" ]] && display_subject=" — $subject"
-        echo "[$short_id] $timestamp  from: $from$display_subject"
-      done <<< "$files"
+      if [[ "$show_subcmd" == "detail" ]]; then
+        # Show full message contents for the N most recent
+        local shown=0
+        while IFS= read -r file; do
+          (( shown >= detail_count )) && break
+          local id from to timestamp subject body
+          id="$(json_get "$file" '.id')"
+          from="$(json_get "$file" '.from')"
+          to="$(json_get "$file" '.to')"
+          timestamp="$(json_get "$file" '.timestamp')"
+          subject="$(json_get "$file" '.subject')"
+          body="$(json_get "$file" '.body')"
+          local short_id="${id:0:8}"
+
+          (( shown > 0 )) && echo ""
+          echo "=== Message [$short_id] ==="
+          echo "From:    $from"
+          echo "To:      $to"
+          echo "Date:    $timestamp"
+          [[ -n "$subject" && "$subject" != "null" ]] && echo "Subject: $subject"
+          echo "---"
+          echo "$body"
+          shown=$((shown + 1))
+        done <<< "$files"
+
+        local total
+        total="$(echo "$files" | wc -l | tr -d ' ')"
+        if (( total > shown )); then
+          echo ""
+          echo "(showing $shown of $total — use -$total to see all)"
+        fi
+      else
+        # Default: summary list
+        local total
+        total="$(echo "$files" | wc -l | tr -d ' ')"
+        echo "=== Inbox ($total messages) ==="
+        echo ""
+        while IFS= read -r file; do
+          local id from subject timestamp
+          id="$(json_get "$file" '.id')"
+          from="$(json_get "$file" '.from')"
+          subject="$(json_get "$file" '.subject')"
+          timestamp="$(json_get "$file" '.timestamp')"
+          local short_id="${id:0:8}"
+          local display_subject=""
+          [[ -n "$subject" && "$subject" != "null" && "$subject" != "" ]] && display_subject=" — $subject"
+          echo "[$short_id] $timestamp  from: $from$display_subject"
+        done <<< "$files"
+        echo ""
+        echo "Use 'cmail inbox show detail' to read the latest, or 'detail -N' for N messages."
+      fi
       ;;
 
     clear)
@@ -1323,21 +1367,40 @@ show_send_help() {
 show_inbox_help() {
   echo "List or manage messages in your inbox"
   echo ""
-  echo "USAGE: cmail inbox [subcommand] [options]"
+  echo "USAGE: cmail inbox <subcommand> [options]"
   echo ""
   echo "SUBCOMMANDS:"
-  echo "  show     List all messages (default)"
+  echo "  show     List messages (has further options, see 'cmail inbox show --help')"
   echo "  clear    Delete all messages (requires confirmation)"
+  echo ""
+  echo "OPTIONS:"
+  echo "  -h, --help   Show this help"
+  echo ""
+  echo "EXAMPLES:"
+  echo "  cmail inbox show"
+  echo "  cmail inbox show detail"
+  echo "  cmail inbox show --if-new"
+  echo "  cmail inbox clear"
+}
+
+show_show_help() {
+  echo "List messages in your inbox"
+  echo ""
+  echo "USAGE: cmail inbox show [subcommand] [options]"
+  echo ""
+  echo "SUBCOMMANDS:"
+  echo "  detail       Show full contents of the most recent message"
+  echo "  detail -N    Show full contents of the N most recent messages"
   echo ""
   echo "OPTIONS:"
   echo "  --if-new     Only show messages if there are unread ones"
   echo "  -h, --help   Show this help"
   echo ""
   echo "EXAMPLES:"
-  echo "  cmail inbox"
-  echo "  cmail inbox show"
-  echo "  cmail inbox --if-new"
-  echo "  cmail inbox clear"
+  echo "  cmail inbox show              List all messages (summary)"
+  echo "  cmail inbox show --if-new     List only if new messages exist"
+  echo "  cmail inbox show detail       Read the most recent message"
+  echo "  cmail inbox show detail -3    Read the 3 most recent messages"
 }
 
 show_read_help() {
