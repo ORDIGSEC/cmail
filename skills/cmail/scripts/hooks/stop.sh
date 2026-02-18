@@ -23,7 +23,7 @@ if [[ -f "$LAST_CHECK_FILE" ]]; then
   fi
 fi
 
-count=$(ls -1 "$INBOX_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ')
+count=$(ls -1 "$INBOX_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ' || true)
 if (( count == 0 )); then
   exit 0
 fi
