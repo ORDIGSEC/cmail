@@ -10,7 +10,7 @@ if [[ ! -f "$UNREAD_MARKER" ]]; then
   exit 0
 fi
 
-count=$(ls -1 "$INBOX_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ')
+count=$(find "$INBOX_DIR" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
 if (( count == 0 )); then
   exit 0
 fi
